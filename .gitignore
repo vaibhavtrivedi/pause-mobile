@@ -1,2 +1,18 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Expo
 .expo/
+dist/
+web-build/
+
+# Build files
+build/
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db

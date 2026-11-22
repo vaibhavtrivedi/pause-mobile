@@ -16,7 +16,10 @@
       "versionCode": 3
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-asset",
+      "expo-status-bar",
+      "expo-audio"
     ]
   }
 }

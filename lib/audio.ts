@@ -1,4 +1,10 @@
-import { Audio } from 'expo-av';
+import {
+  createAudioPlayer,
+  setAudioModeAsync,
+} from 'expo-audio';
+
+import type { AudioPlayer } from 'expo-audio';
+
 import {
   SoundTheme,
   UserPreferences,
@@ -25,19 +31,21 @@ const EFFECTS = {
 // AUDIO STATE
 // ==========================================
 
-let ambientSound: Audio.Sound | null = null;
+let ambientSound: AudioPlayer | null = null;
 
-const activeEffects = new Set<Audio.Sound>();
+const activeEffects = new Set<AudioPlayer>();
 
 let currentTheme: SoundTheme = 'silent';
 
-let musicVolume = 0.6;
+let musicVolume = 0.4;
 let effectsVolume = 0.7;
 
-let musicEnabled = false;
+let musicEnabled = true;
 let effectsEnabled = true;
 
 let audioInitialized = false;
+let initializationPromise: Promise<void> | null = null;
+
 let ambientRequestId = 0;
 
 // ==========================================
@@ -47,18 +55,26 @@ let ambientRequestId = 0;
 export async function initializeAudio(): Promise<void> {
   if (audioInitialized) return;
 
-  try {
-    await Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    });
-
-    audioInitialized = true;
-  } catch (error) {
-    console.warn('Audio initialization failed:', error);
+  if (initializationPromise) {
+    return initializationPromise;
   }
+
+  initializationPromise = (async () => {
+    try {
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        interruptionMode: 'mixWithOthers',
+      });
+
+      audioInitialized = true;
+    } catch (error) {
+      console.warn('Audio initialization failed:', error);
+    } finally {
+      initializationPromise = null;
+    }
+  })();
+
+  return initializationPromise;
 }
 
 // ==========================================
@@ -80,30 +96,30 @@ export function configureAudio(
     0,
     Math.min(1, preferences.effectsVolume / 100)
   );
-
-  // Do not update currentTheme here.
-  // It must represent the track actually loaded.
 }
 
 // ==========================================
 // INTERNAL CLEANUP
 // ==========================================
 
+function unloadPlayer(player: AudioPlayer): void {
+  try {
+    player.pause();
+    player.remove();
+  } catch (error) {
+    console.warn('Audio player cleanup failed:', error);
+  }
+}
+
 async function unloadAmbient(): Promise<void> {
-  const sound = ambientSound;
+  const player = ambientSound;
 
   ambientSound = null;
   currentTheme = 'silent';
 
-  if (!sound) return;
-
-  try {
-    await sound.stopAsync();
-  } catch {}
-
-  try {
-    await sound.unloadAsync();
-  } catch {}
+  if (player) {
+    unloadPlayer(player);
+  }
 }
 
 // ==========================================
@@ -129,46 +145,37 @@ export async function playAmbient(
 
   const requestId = ++ambientRequestId;
 
-  // Reuse only when the actual loaded track matches.
   if (ambientSound && currentTheme === theme) {
-    try {
-      const status = await ambientSound.getStatusAsync();
+    if (ambientSound.isLoaded) {
+      ambientSound.volume = musicVolume;
 
-      if (status.isLoaded) {
-        await ambientSound.setVolumeAsync(musicVolume);
-
-        if (!status.isPlaying) {
-          await ambientSound.playAsync();
-        }
-
-        return;
+      if (ambientSound.paused) {
+        ambientSound.play();
       }
-    } catch {
-      await unloadAmbient();
+
+      return;
     }
   }
 
   await unloadAmbient();
 
   try {
-    const { sound } = await Audio.Sound.createAsync(
-      source,
-      {
-        shouldPlay: true,
-        isLooping: true,
-        volume: musicVolume,
-      }
-    );
+    const player = createAudioPlayer(source, {
+      updateInterval: 250,
+    });
 
-    // Ignore an outdated request if the user changed settings
-    // while the previous track was loading.
+    player.loop = true;
+    player.volume = musicVolume;
+
     if (requestId !== ambientRequestId) {
-      await sound.unloadAsync();
+      player.remove();
       return;
     }
 
-    ambientSound = sound;
+    ambientSound = player;
     currentTheme = theme;
+
+    player.play();
 
   } catch (error) {
     console.warn('Ambient playback failed:', error);
@@ -179,11 +186,7 @@ export async function pauseAmbient(): Promise<void> {
   if (!ambientSound) return;
 
   try {
-    const status = await ambientSound.getStatusAsync();
-
-    if (status.isLoaded && status.isPlaying) {
-      await ambientSound.pauseAsync();
-    }
+    ambientSound.pause();
   } catch (error) {
     console.warn('Could not pause ambient audio:', error);
   }
@@ -200,10 +203,8 @@ export async function resumeAmbient(): Promise<void> {
   }
 
   try {
-    const status = await ambientSound.getStatusAsync();
-
-    if (status.isLoaded && !status.isPlaying) {
-      await ambientSound.playAsync();
+    if (ambientSound.isLoaded && ambientSound.paused) {
+      ambientSound.play();
     }
   } catch (error) {
     console.warn('Could not resume ambient audio:', error);
@@ -211,9 +212,7 @@ export async function resumeAmbient(): Promise<void> {
 }
 
 export async function stopAmbient(): Promise<void> {
-  // Invalidate any track currently being loaded.
   ambientRequestId++;
-
   await unloadAmbient();
 }
 
@@ -228,33 +227,36 @@ export async function playEffect(
 
   await initializeAudio();
 
-  let sound: Audio.Sound | null = null;
+  let player: AudioPlayer | null = null;
 
   try {
-    const result = await Audio.Sound.createAsync(
-      EFFECTS[effect],
-      {
-        shouldPlay: true,
-        volume: effectsVolume,
+    player = createAudioPlayer(EFFECTS[effect], {
+      updateInterval: 100,
+    });
+
+    player.volume = effectsVolume;
+
+    activeEffects.add(player);
+
+    const activePlayer = player;
+
+    const subscription = player.addListener(
+      'playbackStatusUpdate',
+      status => {
+        if (status.didJustFinish) {
+          activeEffects.delete(activePlayer);
+          subscription.remove();
+          unloadPlayer(activePlayer);
+        }
       }
     );
 
-    sound = result.sound;
-    activeEffects.add(sound);
-
-    sound.setOnPlaybackStatusUpdate(status => {
-      if (status.isLoaded && status.didJustFinish && sound) {
-        activeEffects.delete(sound);
-        sound.unloadAsync().catch(() => {});
-      }
-    });
+    player.play();
 
   } catch (error) {
-    if (sound) {
-      activeEffects.delete(sound);
-      try {
-        await sound.unloadAsync();
-      } catch {}
+    if (player) {
+      activeEffects.delete(player);
+      unloadPlayer(player);
     }
 
     console.warn('Sound effect playback failed:', error);
@@ -273,7 +275,7 @@ export async function updateMusicVolume(
   if (!ambientSound) return;
 
   try {
-    await ambientSound.setVolumeAsync(musicVolume);
+    ambientSound.volume = musicVolume;
   } catch (error) {
     console.warn('Music volume update failed:', error);
   }
@@ -312,20 +314,12 @@ export async function applyAudioPreferences(
 export async function cleanupAudio(): Promise<void> {
   await stopAmbient();
 
-  const sounds = Array.from(activeEffects);
+  const players = Array.from(activeEffects);
   activeEffects.clear();
 
-  await Promise.all(
-    sounds.map(async sound => {
-      try {
-        await sound.stopAsync();
-      } catch {}
-
-      try {
-        await sound.unloadAsync();
-      } catch {}
-    })
-  );
+  players.forEach(player => {
+    unloadPlayer(player);
+  });
 }
 
 // ==========================================

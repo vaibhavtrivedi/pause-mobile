@@ -52,7 +52,7 @@ const THEMES: Record<
   }
 > = {
   energy: {
-    background: ['#071326', '#102747', '#172D46'],
+    background: ['#050E20', '#0B1D38', '#142B49'],
     primary: '#416FAE',
     secondary: '#83B9F5',
     core: '#D9EDFF',
@@ -108,6 +108,7 @@ export default function Breathing() {
     useState<UserPreferences>(DEFAULT_PREFERENCES);
 
   const [loaded, setLoaded] = useState(false);
+  const [orbReady, setOrbReady] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [running, setRunning] = useState(true);
   const [finished, setFinished] = useState(false);
@@ -117,6 +118,10 @@ export default function Breathing() {
   const particleMotion = useRef(new Animated.Value(0)).current;
 
   const cycle = useRef<Animated.CompositeAnimation | null>(null);
+
+  const phaseRef = useRef<Phase>('inhale');
+  const phaseRemainingMsRef = useRef(INHALE_SECONDS * 1000);
+  const phaseStartedAtRef = useRef(0);
 
   const elapsedRef = useRef(0);
   const runningRef = useRef(true);
@@ -133,6 +138,40 @@ export default function Breathing() {
     elapsed % BREATH_CYCLE_SECONDS < INHALE_SECONDS
       ? 'inhale'
       : 'exhale';
+
+  // ========================================
+  // THEME ANIMATION VALUES
+  // ========================================
+
+  const themeRotation = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const reverseRotation = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['360deg', '0deg'],
+  });
+
+  const rippleOpacity = particleMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.65, 0.3, 0.02],
+  });
+
+  const energyHighlightX = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-13, 13],
+  });
+
+  const energyHighlightY = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-12, 10],
+  });
+
+  const energyPulse = particleMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.65, 1, 0.65],
+  });
 
   // ========================================
   // PREFERENCES
@@ -174,112 +213,170 @@ export default function Breathing() {
   );
 
   // ========================================
-  // ANIMATION CONTROL
-  // ========================================
+// ANIMATION CONTROL
+// ========================================
 
-  const stopAnimation = useCallback(() => {
-    cycle.current?.stop();
+const stopAnimation = useCallback(() => {
+  if (cycle.current && phaseStartedAtRef.current) {
+    const elapsedMs =
+      Date.now() - phaseStartedAtRef.current;
+
+    phaseRemainingMsRef.current = Math.max(
+      0,
+      phaseRemainingMsRef.current - elapsedMs
+    );
+  }
+
+  cycle.current?.stop();
+  cycle.current = null;
+  phaseStartedAtRef.current = 0;
+}, []);
+
+const startOrbAnimation = useCallback(() => {
+  if (
+    !runningRef.current ||
+    finishedRef.current ||
+    !loaded ||
+    !orbReady
+  ) {
+    return;
+  }
+
+  const inhale = phaseRef.current === 'inhale';
+
+  const phaseDuration = inhale
+    ? INHALE_SECONDS * 1000
+    : EXHALE_SECONDS * 1000;
+
+  const remainingDuration = Math.max(
+    1,
+    Math.min(
+      phaseRemainingMsRef.current,
+      phaseDuration
+    )
+  );
+
+  const progress =
+    1 - remainingDuration / phaseDuration;
+
+  const fromScale = inhale
+    ? 0.82 + progress * 0.30
+    : 1.12 - progress * 0.30;
+
+  const toScale = inhale ? 1.12 : 0.82;
+
+  const fromGlow = inhale
+    ? 0.25 + progress * 0.65
+    : 0.90 - progress * 0.65;
+
+  const toGlow = inhale ? 0.90 : 0.25;
+
+  // Keep orbital rotation synchronized with breathing.
+  const cyclePosition = inhale
+  ? 1 - progress * 0.6
+  : 0.4 + progress * 0.6;
+
+  scale.setValue(fromScale);
+  glow.setValue(fromGlow);
+  particleMotion.setValue(cyclePosition);
+
+  phaseStartedAtRef.current = Date.now();
+
+  const animations = [
+    Animated.timing(scale, {
+      toValue: toScale,
+      duration: remainingDuration,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    }),
+
+    Animated.timing(glow, {
+      toValue: toGlow,
+      duration: remainingDuration,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    }),
+  ];
+
+  if (!reducedMotionRef.current) {
+    animations.push(
+      Animated.timing(particleMotion, {
+        toValue: inhale ? 0.4 : 1,
+        duration: remainingDuration,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      })
+    );
+  }
+
+  const animation = Animated.parallel(animations);
+
+  cycle.current = animation;
+
+  animation.start(({ finished: completed }) => {
     cycle.current = null;
-  }, []);
+    phaseStartedAtRef.current = 0;
 
-  const startOrbAnimation = useCallback(() => {
     if (
+      !completed ||
       !runningRef.current ||
-      finishedRef.current ||
-      !loaded
+      finishedRef.current
     ) {
       return;
     }
 
-    stopAnimation();
+    // Move to the next breathing phase.
+    if (phaseRef.current === 'inhale') {
+      phaseRef.current = 'exhale';
 
-    const position =
-      elapsedRef.current % BREATH_CYCLE_SECONDS;
+      phaseRemainingMsRef.current =
+        EXHALE_SECONDS * 1000;
+    } else {
+      phaseRef.current = 'inhale';
 
-    const inhale = position < INHALE_SECONDS;
-
-    const progress = inhale
-      ? position / INHALE_SECONDS
-      : (position - INHALE_SECONDS) / EXHALE_SECONDS;
-
-    const fromScale = inhale
-      ? 0.82 + progress * 0.30
-      : 1.12 - progress * 0.30;
-
-    const toScale = inhale ? 1.12 : 0.82;
-
-    const fromGlow = inhale
-      ? 0.25 + progress * 0.65
-      : 0.90 - progress * 0.65;
-
-    const toGlow = inhale ? 0.90 : 0.25;
-
-    const remainingSeconds = inhale
-      ? INHALE_SECONDS - position
-      : BREATH_CYCLE_SECONDS - position;
-
-    const duration = Math.max(
-      100,
-      remainingSeconds * 1000
-    );
-
-    scale.setValue(fromScale);
-    glow.setValue(fromGlow);
-
-    const animation = Animated.parallel([
-      Animated.timing(scale, {
-        toValue: toScale,
-        duration: reducedMotionRef.current
-          ? Math.min(duration, 1500)
-          : duration,
-        easing: Easing.inOut(Easing.ease),
-        useNativeDriver: true,
-      }),
-
-      Animated.timing(glow, {
-        toValue: toGlow,
-        duration: reducedMotionRef.current
-          ? Math.min(duration, 1500)
-          : duration,
-        easing: Easing.inOut(Easing.ease),
-        useNativeDriver: true,
-      }),
-    ]);
-
-    cycle.current = animation;
-
-    animation.start(({ finished: completed }) => {
-      if (
-        completed &&
-        runningRef.current &&
-        !finishedRef.current
-      ) {
-        startOrbAnimation();
-      }
-    });
-  }, [
-    loaded,
-    scale,
-    glow,
-    stopAnimation,
-  ]);
-
-  useEffect(() => {
-    if (!loaded || !running || finished) {
-      stopAnimation();
-      return;
+      phaseRemainingMsRef.current =
+        INHALE_SECONDS * 1000;
     }
 
     startOrbAnimation();
+  });
+}, [
+  loaded,
+  orbReady,
+  scale,
+  glow,
+  particleMotion,
+]);
 
-    return stopAnimation;
-  }, [
-    loaded,
-    running,
-    finished,
-    startOrbAnimation,
-    stopAnimation,
-  ]);
+// Wait until the orb has rendered before starting its animation.
+useEffect(() => {
+  if (!loaded || !orbReady || !running || finished) {
+    stopAnimation();
+    return;
+  }
+
+  let firstFrame = 0;
+  let secondFrame = 0;
+
+  firstFrame = requestAnimationFrame(() => {
+    secondFrame = requestAnimationFrame(() => {
+      startOrbAnimation();
+    });
+  });
+
+  return () => {
+    cancelAnimationFrame(firstFrame);
+    cancelAnimationFrame(secondFrame);
+    stopAnimation();
+  };
+}, [
+  loaded,
+  orbReady,
+  running,
+  finished,
+  startOrbAnimation,
+  stopAnimation,
+]);
 
   // ========================================
   // SESSION TIMER
@@ -333,48 +430,6 @@ export default function Breathing() {
     preferences.hapticsEnabled,
   ]);
 
-  // ========================================
-  // PARTICLE ANIMATION
-  // ========================================
-
-  useEffect(() => {
-    if (
-      !loaded ||
-      !running ||
-      preferences.reducedMotion
-    ) {
-      particleMotion.stopAnimation();
-      particleMotion.setValue(0);
-      return;
-    }
-
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(particleMotion, {
-          toValue: 1,
-          duration: 4000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-
-        Animated.timing(particleMotion, {
-          toValue: 0,
-          duration: 4000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-
-    animation.start();
-
-    return () => animation.stop();
-  }, [
-    loaded,
-    running,
-    preferences.reducedMotion,
-    particleMotion,
-  ]);
 
   // ========================================
   // SESSION CONTROLS
@@ -386,39 +441,49 @@ export default function Breathing() {
 
       setRunning(false);
       stopAnimation();
-
-      // Ambient music deliberately continues playing.
     } else {
       runningRef.current = true;
 
       setRunning(true);
-
-      // Ambient music continues without restarting.
     }
   };
 
   const reset = () => {
-    stopAnimation();
+  const wasAlreadyRunning =
+    runningRef.current && !finishedRef.current;
 
-    elapsedRef.current = 0;
-    runningRef.current = true;
-    finishedRef.current = false;
+  stopAnimation();
 
-    setElapsed(0);
-    setFinished(false);
-    setRunning(true);
+  elapsedRef.current = 0;
+  runningRef.current = true;
+  finishedRef.current = false;
 
-    lastPhase.current = 'inhale';
-    completionPlayed.current = false;
+  setElapsed(0);
+  setFinished(false);
+  setRunning(true);
 
-    scale.setValue(0.82);
-    glow.setValue(0.25);
-  };
+  phaseRef.current = 'inhale';
+  phaseRemainingMsRef.current = INHALE_SECONDS * 1000;
+  phaseStartedAtRef.current = 0;
+
+  particleMotion.setValue(1);
+
+  lastPhase.current = 'inhale';
+  completionPlayed.current = false;
+
+  scale.setValue(0.82);
+  glow.setValue(0.25);
+
+  // Restart explicitly when resetting an active session.
+  if (wasAlreadyRunning && loaded && orbReady) {
+    requestAnimationFrame(() => {
+      startOrbAnimation();
+    });
+  }
+};
 
   const leave = () => {
     stopAnimation();
-
-    // Do not unload shared ambient audio here.
     router.replace('/choose');
   };
 
@@ -429,12 +494,10 @@ export default function Breathing() {
   useEffect(() => {
     if (finished && !completionPlayed.current) {
       completionPlayed.current = true;
-
       AudioEffects.completion();
     }
   }, [finished]);
 
-  // Stop animation when the component unmounts.
   useEffect(() => {
     return () => {
       stopAnimation();
@@ -556,7 +619,12 @@ export default function Breathing() {
           Breathe gently, at a pace that feels comfortable.
         </Text>
 
-        <View style={styles.orbStage}>
+        {/* THEME-SPECIFIC ORB STAGE */}
+
+        <View
+          style={styles.orbStage}
+          onLayout={() => setOrbReady(true)}
+        >
           {!preferences.reducedMotion && (
             <Animated.View
               style={[
@@ -573,76 +641,328 @@ export default function Breathing() {
             />
           )}
 
-          {PARTICLES.map((particle, index) => (
-            <Animated.View
-              key={index}
-              style={[
-                styles.particle,
-                {
-                  width: particle.size,
-                  height: particle.size,
-                  borderRadius: particle.size,
-                  backgroundColor: theme.particle,
-                  left: '50%',
-                  top: '50%',
-                  opacity: preferences.reducedMotion
-                    ? 0.5
-                    : particleMotion.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.25, 0.9],
-                      }),
-                  transform: [
-                    { translateX: particle.x },
-                    {
-                      translateY: preferences.reducedMotion
-                        ? particle.y
-                        : particleMotion.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [
-                              particle.y,
-                              particle.y - 15,
-                            ],
-                          }),
-                    },
-                  ],
-                },
-              ]}
-            />
-          ))}
+          {/* ENERGY THEME */}
 
-          <Animated.View
-            style={[
-              styles.orbOuter,
-              {
-                backgroundColor: theme.primary,
-                borderColor: theme.secondary,
-                transform: [{ scale }],
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.orbRing,
-                { borderColor: theme.secondary },
-              ]}
-            />
+          {preferences.orbTheme === 'energy' && (
+            <>
+              {/* Atmospheric halo */}
 
-            <View
-              style={[
-                styles.orbMiddle,
-                { backgroundColor: theme.secondary },
-              ]}
-            >
-              <View
+              <Animated.View
+                pointerEvents="none"
                 style={[
-                  styles.orbInner,
-                  { backgroundColor: theme.core },
+                  styles.energyHalo,
+                  {
+                    opacity: preferences.reducedMotion
+                      ? 0.45
+                      : energyPulse,
+                    transform: [{ scale }],
+                  },
+                ]}
+              />
+
+              {/* Rotating orbital glass rings */}
+
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.energyOrbit,
+                  styles.energyOrbitOuter,
+                  {
+                    borderColor: '#75BFFF',
+                    opacity: 0.55,
+                    transform: [
+                      { rotate: themeRotation },
+                    ],
+                  },
                 ]}
               >
-                <Text style={styles.orbStar}>✦</Text>
-              </View>
-            </View>
-          </Animated.View>
+                <View style={styles.energyOrbitNode} />
+              </Animated.View>
+
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.energyOrbit,
+                  styles.energyOrbitInner,
+                  {
+                    borderColor: '#C0E7FF',
+                    opacity: 0.65,
+                    transform: [
+                      { rotate: reverseRotation },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.energyOrbitNodeSmall} />
+              </Animated.View>
+
+              {/* Floating energy particles */}
+
+              {PARTICLES.map((particle, index) => (
+                <Animated.View
+                  key={index}
+                  pointerEvents="none"
+                  style={[
+                    styles.energyParticle,
+                    {
+                      width: particle.size + 2,
+                      height: particle.size + 2,
+                      left: '50%',
+                      top: '50%',
+                      backgroundColor: theme.particle,
+                      opacity: preferences.reducedMotion
+                        ? 0.5
+                        : particleMotion.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.2, 1],
+                          }),
+                      transform: [
+                        { translateX: particle.x },
+                        {
+                          translateY: preferences.reducedMotion
+                            ? particle.y
+                            : particleMotion.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [
+                                  particle.y,
+                                  particle.y - 20,
+                                ],
+                              }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              ))}
+
+              {/* Main breathing sphere */}
+
+              <Animated.View
+                style={[
+                  styles.energyOrbAssembly,
+                  {
+                    transform: [{ scale }],
+                  },
+                ]}
+              >
+                {/* Outer glass shell */}
+
+                <View style={styles.energyShell}>
+                  <LinearGradient
+                    colors={[
+                      'rgba(191,226,255,0.38)',
+                      'rgba(67,130,193,0.16)',
+                      'rgba(17,48,87,0.58)',
+                    ]}
+                    style={styles.energyShellGradient}
+                  >
+                    {/* Inner luminous sphere */}
+
+                    <View style={styles.energyInnerSphere}>
+                      <LinearGradient
+                        colors={[
+                          '#EAF8FF',
+                          '#A7D8FF',
+                          '#5596D7',
+                          '#1E4D83',
+                        ]}
+                        locations={[0, 0.25, 0.65, 1]}
+                        style={styles.energyInnerGradient}
+                      >
+                        {/* Bright inner core */}
+
+                        <View style={styles.energyCore}>
+                          <LinearGradient
+                            colors={[
+                              '#FFFFFF',
+                              '#D7F0FF',
+                              '#91CCFF',
+                            ]}
+                            style={styles.energyCoreGradient}
+                          />
+                        </View>
+
+                        {/* Moving reflective highlight */}
+
+                        {!preferences.reducedMotion && (
+                          <Animated.View
+                            pointerEvents="none"
+                            style={[
+                              styles.energyHighlight,
+                              {
+                                transform: [
+                                  { translateX: energyHighlightX },
+                                  { translateY: energyHighlightY },
+                                ],
+                              },
+                            ]}
+                          />
+                        )}
+
+                        <View style={styles.energyLowerShade} />
+                      </LinearGradient>
+                    </View>
+
+                    {/* Glass reflection */}
+
+                    <View style={styles.energyGlassReflection} />
+                  </LinearGradient>
+                </View>
+
+                {/* Outer luminous edge */}
+
+                <View style={styles.energyRim} />
+              </Animated.View>
+            </>
+          )}
+
+          {/* AURORA THEME */}
+
+          {preferences.orbTheme === 'aurora' && (
+            <>
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  {
+                    borderColor: '#72F5D0',
+                    transform: [{ rotate: themeRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  styles.auroraRibbonTwo,
+                  {
+                    borderColor: '#A1A8FF',
+                    transform: [{ rotate: reverseRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  styles.auroraRibbonThree,
+                  {
+                    borderColor: '#65D9F2',
+                    transform: [{ rotate: themeRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraCore,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#D6FFF0', '#62DDBB', '#246E83']}
+                  style={styles.auroraGradient}
+                >
+                  <View style={styles.auroraHighlight} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
+
+          {/* RIPPLE THEME */}
+
+          {preferences.orbTheme === 'ripple' && (
+            <>
+              {[0, 1, 2].map(index => (
+                <Animated.View
+                  key={index}
+                  style={[
+                    styles.rippleRing,
+                    {
+                      borderColor: theme.secondary,
+                      opacity: preferences.reducedMotion
+                        ? 0.35
+                        : rippleOpacity,
+                      transform: [
+                        {
+                          scale: preferences.reducedMotion
+                            ? 0.85 + index * 0.3
+                            : particleMotion.interpolate({
+                                inputRange: [0, 0.5, 1],
+                                outputRange: [
+                                  0.65 + index * 0.25,
+                                  1.15 + index * 0.25,
+                                  1.65 + index * 0.25,
+                                ],
+                              }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              ))}
+
+              <Animated.View
+                style={[
+                  styles.waterOrb,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#D8FAFF', '#69C7E8', '#155578']}
+                  style={styles.waterGradient}
+                >
+                  <View style={styles.waterHighlight} />
+                  <View style={styles.waterHighlightTwo} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
+
+          {/* SOLAR THEME */}
+
+          {preferences.orbTheme === 'solar' && (
+            <>
+              <Animated.View
+                style={[
+                  styles.solarRays,
+                  {
+                    transform: [
+                      { rotate: themeRotation },
+                      { scale },
+                    ],
+                  },
+                ]}
+              >
+                {Array.from({ length: 12 }).map((_, index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.solarRay,
+                      {
+                        transform: [
+                          { rotate: `${index * 30}deg` },
+                        ],
+                      },
+                    ]}
+                  />
+                ))}
+              </Animated.View>
+
+              <Animated.View
+                style={[
+                  styles.solarOrb,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#FFF8D7', '#FFC66F', '#D87935']}
+                  style={styles.solarGradient}
+                >
+                  <View style={styles.solarHighlight} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
         </View>
 
         <Text style={styles.phase}>
@@ -790,55 +1110,330 @@ const styles = StyleSheet.create({
     borderRadius: 150,
   },
 
-  particle: {
+  // ENERGY
+
+  energyHalo: {
     position: 'absolute',
-    marginLeft: -2,
-    marginTop: -2,
+    width: 255,
+    height: 255,
+    borderRadius: 130,
+    borderWidth: 1,
+    borderColor: '#73BFFF',
+    backgroundColor: 'rgba(49,125,194,0.07)',
+  },
+
+  energyOrbit: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    borderWidth: 1.5,
+    borderRadius: 150,
+  },
+
+  energyOrbitOuter: {
+    width: 255,
+    height: 175,
+  },
+
+  energyOrbitInner: {
+    width: 225,
+    height: 205,
+    borderWidth: 1,
+  },
+
+  energyOrbitNode: {
+    width: 9,
+    height: 9,
+    borderRadius: 6,
+    backgroundColor: '#C8EBFF',
+    marginTop: -5,
+    shadowColor: '#8DCFFF',
+    shadowOpacity: 1,
+    shadowRadius: 12,
     elevation: 8,
   },
 
-  orbOuter: {
-    width: 205,
-    height: 205,
-    borderRadius: 120,
-    borderWidth: 2,
+  energyOrbitNodeSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+    marginTop: -3,
+    shadowColor: '#B5E5FF',
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
+  energyParticle: {
+    position: 'absolute',
+    borderRadius: 20,
+    marginLeft: -3,
+    marginTop: -3,
+    elevation: 8,
+    shadowColor: '#A5D9FF',
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+  },
+
+  energyOrbAssembly: {
+    width: 190,
+    height: 190,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#8FC8FF',
-    shadowOpacity: 0.55,
-    shadowRadius: 35,
+  },
+
+  energyShell: {
+    width: 190,
+    height: 190,
+    borderRadius: 100,
+    padding: 9,
+    borderWidth: 1.5,
+    borderColor: 'rgba(191,226,255,0.85)',
+    backgroundColor: 'rgba(103,167,224,0.16)',
+    shadowColor: '#78BDFF',
+    shadowOpacity: 0.85,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 22,
+  },
+
+  energyShellGradient: {
+    flex: 1,
+    borderRadius: 100,
+    padding: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(219,242,255,0.55)',
+  },
+
+  energyInnerSphere: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 100,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(222,244,255,0.7)',
+  },
+
+  energyInnerGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+
+  energyCore: {
+    width: 75,
+    height: 75,
+    borderRadius: 45,
+    padding: 4,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 1,
+    shadowRadius: 25,
+    shadowOffset: { width: 0, height: 0 },
     elevation: 18,
   },
 
-  orbRing: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 100,
-    borderWidth: 1,
-    opacity: 0.6,
+  energyCoreGradient: {
+    flex: 1,
+    borderRadius: 45,
+    backgroundColor: '#FFFFFF',
   },
 
-  orbMiddle: {
+  energyHighlight: {
+    position: 'absolute',
+    width: 95,
+    height: 42,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    top: 24,
+    left: 30,
+    transform: [{ rotate: '-38deg' }],
+  },
+
+  energyLowerShade: {
+    position: 'absolute',
+    width: 160,
+    height: 65,
+    borderRadius: 100,
+    backgroundColor: 'rgba(5,35,75,0.22)',
+    bottom: -32,
+  },
+
+  energyGlassReflection: {
+    position: 'absolute',
+    width: 50,
+    height: 115,
+    borderRadius: 40,
+    borderLeftWidth: 2,
+    borderLeftColor: 'rgba(255,255,255,0.55)',
+    top: 15,
+    left: 12,
+    transform: [{ rotate: '18deg' }],
+  },
+
+  energyRim: {
+    position: 'absolute',
+    width: 177,
+    height: 177,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: 'rgba(229,246,255,0.55)',
+  },
+
+  // AURORA
+
+  auroraRibbon: {
+    position: 'absolute',
+    width: 155,
+    height: 245,
+    borderWidth: 5,
+    borderRadius: 130,
+    opacity: 0.65,
+  },
+
+  auroraRibbonTwo: {
+    width: 190,
+    height: 225,
+    borderWidth: 4,
+    opacity: 0.55,
+  },
+
+  auroraRibbonThree: {
+    width: 220,
+    height: 175,
+    borderWidth: 3,
+    opacity: 0.4,
+  },
+
+  auroraCore: {
     width: 145,
     height: 145,
+    borderRadius: 90,
+    overflow: 'hidden',
+    elevation: 15,
+  },
+
+  auroraGradient: {
+    flex: 1,
     borderRadius: 90,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  orbInner: {
-    width: 95,
-    height: 95,
-    borderRadius: 60,
+  auroraHighlight: {
+    width: 65,
+    height: 65,
+    borderRadius: 40,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+    transform: [{ translateY: -15 }],
+  },
+
+  // RIPPLE
+
+  rippleRing: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 100,
+    borderWidth: 2,
+  },
+
+  waterOrb: {
+    width: 155,
+    height: 155,
+    borderRadius: 90,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#A5ECFF',
+    elevation: 20,
+  },
+
+  waterGradient: {
+    flex: 1,
+    borderRadius: 90,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  orbStar: {
-    fontSize: 38,
-    color: '#31547D',
+  waterHighlight: {
+    position: 'absolute',
+    width: 95,
+    height: 30,
+    borderRadius: 50,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+    top: 28,
+    left: 25,
+    transform: [{ rotate: '-35deg' }],
   },
+
+  waterHighlightTwo: {
+    position: 'absolute',
+    width: 50,
+    height: 15,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.2,
+    bottom: 35,
+    right: 25,
+  },
+
+  // SOLAR
+
+  solarRays: {
+    position: 'absolute',
+    width: 245,
+    height: 245,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  solarRay: {
+    position: 'absolute',
+    width: 9,
+    height: 45,
+    borderRadius: 10,
+    backgroundColor: '#FFC978',
+    top: 0,
+    opacity: 0.85,
+  },
+
+  solarOrb: {
+    width: 155,
+    height: 155,
+    borderRadius: 90,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#FFE6A5',
+    elevation: 25,
+    shadowColor: '#FFB34F',
+    shadowOpacity: 0.9,
+    shadowRadius: 35,
+  },
+
+  solarGradient: {
+    flex: 1,
+    borderRadius: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  solarHighlight: {
+    width: 75,
+    height: 75,
+    borderRadius: 50,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.3,
+    transform: [{ translateY: -18 }],
+  },
+
+  // SESSION UI
 
   phase: {
     color: '#FFFFFF',
