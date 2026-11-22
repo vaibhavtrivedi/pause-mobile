@@ -1,4 +1,10 @@
 import {
+  useCallback,
+  useRef,
+  useState,
+} from 'react';
+
+import {
   View,
   Text,
   Pressable,
@@ -6,8 +12,24 @@ import {
   ScrollView,
 } from 'react-native';
 
+import * as Haptics from 'expo-haptics';
+
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+
+import {
+  getProgress,
+  getTodayProgress,
+  calculateCurrentStreak,
+  ProgressData,
+} from '../lib/progress';
+
+import { loadPreferences } from '../lib/preferences';
+
+import {
+  applyAudioPreferences,
+  AudioEffects,
+} from '../lib/audio';
 
 const C = {
   text: '#F5F7FF',
@@ -16,7 +38,78 @@ const C = {
   border: '#304967',
 };
 
+const formatDuration = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  return remainingMinutes > 0
+    ? `${hours}h ${remainingMinutes}m`
+    : `${hours}h`;
+};
+
 export default function Home() {
+  const hapticsEnabled = useRef(false);
+
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      async function initializePreferences() {
+        try {
+          const [preferences, progressData] = await Promise.all([
+            loadPreferences(),
+            getProgress(),
+          ]);
+
+          if (!active) return;
+
+          hapticsEnabled.current = preferences.hapticsEnabled;
+
+          setProgress(progressData);
+
+          await applyAudioPreferences(preferences);
+        } catch (error) {
+          console.warn(
+            'Could not load Home preferences or progress:',
+            error
+          );
+        }
+      }
+
+      initializePreferences();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  const navigate = (path: string) => {
+    if (hapticsEnabled.current) {
+      Haptics.selectionAsync().catch(() => {});
+    }
+
+    AudioEffects.transition();
+
+    router.push(path as any);
+  };
+
+  const today = progress
+    ? getTodayProgress(progress)
+    : null;
+
+  const streak = progress
+    ? calculateCurrentStreak(progress.days)
+    : 0;
+
   return (
     <LinearGradient
       colors={['#071326', '#102744', '#192F4B']}
@@ -40,7 +133,7 @@ export default function Home() {
             accessibilityRole="button"
             accessibilityLabel="Open preferences"
             style={s.settingsButton}
-            onPress={() => router.push('/preferences')}
+            onPress={() => navigate('/preferences')}
           >
             <Text style={s.settingsIcon}>⚙</Text>
             <Text style={s.settingsText}>SETTINGS</Text>
@@ -74,7 +167,7 @@ export default function Home() {
           <Pressable
             accessibilityRole="button"
             style={s.primary}
-            onPress={() => router.push('/choose')}
+            onPress={() => navigate('/choose')}
           >
             <Text style={s.primaryText}>
               START MY RESET  →
@@ -96,7 +189,7 @@ export default function Home() {
         <View style={s.activityRow}>
           <Pressable
             style={s.activityCard}
-            onPress={() => router.push('/breathing')}
+            onPress={() => navigate('/breathing')}
           >
             <Text style={s.activityIcon}>✨</Text>
             <Text style={s.activityTitle}>Breathe</Text>
@@ -107,7 +200,7 @@ export default function Home() {
 
           <Pressable
             style={s.activityCard}
-            onPress={() => router.push('/bubbles')}
+            onPress={() => navigate('/bubbles')}
           >
             <Text style={s.activityIcon}>🫧</Text>
             <Text style={s.activityTitle}>Release</Text>
@@ -116,6 +209,79 @@ export default function Home() {
             </Text>
           </Pressable>
         </View>
+
+        {/* MY PROGRESS */}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="View my progress, daily activities and achievements"
+          style={s.progressCard}
+          onPress={() => navigate('/progress')}
+        >
+          <View style={s.progressHeader}>
+            <View>
+              <Text style={s.progressEyebrow}>
+                YOUR PERSONAL JOURNEY
+              </Text>
+
+              <Text style={s.progressTitle}>
+                My Progress
+              </Text>
+            </View>
+
+            <Text style={s.progressArrow}>↗</Text>
+          </View>
+
+          <View style={s.progressStats}>
+            <View style={s.progressStat}>
+              <Text style={s.progressIcon}>🌱</Text>
+
+              <Text style={s.progressNumber}>
+                {today?.activityCount ?? 0}
+              </Text>
+
+              <Text style={s.progressLabel}>
+                Today's activities
+              </Text>
+            </View>
+
+            <View style={s.progressDivider} />
+
+            <View style={s.progressStat}>
+              <Text style={s.progressIcon}>⏳</Text>
+
+              <Text style={s.progressNumber}>
+                {formatDuration(today?.durationSeconds ?? 0)}
+              </Text>
+
+              <Text style={s.progressLabel}>
+                Practice time
+              </Text>
+            </View>
+
+            <View style={s.progressDivider} />
+
+            <View style={s.progressStat}>
+              <Text style={s.progressIcon}>🔥</Text>
+
+              <Text style={s.progressNumber}>
+                {streak}
+              </Text>
+
+              <Text style={s.progressLabel}>
+                Day streak
+              </Text>
+            </View>
+          </View>
+
+          <View style={s.progressFooter}>
+            <Text style={s.progressFooterText}>
+              TRACK ACTIVITIES & UNLOCK ACHIEVEMENTS
+            </Text>
+
+            <Text style={s.progressFooterArrow}>→</Text>
+          </View>
+        </Pressable>
 
         {/* CALM UNIVERSE */}
 
@@ -132,7 +298,7 @@ export default function Home() {
           </Text>
 
           <Pressable
-            onPress={() => router.push('/history')}
+            onPress={() => navigate('/history')}
             style={s.historyButton}
           >
             <Text style={s.historyText}>
@@ -358,6 +524,99 @@ const s = StyleSheet.create({
     color: C.muted,
     fontSize: 11,
     marginTop: 5,
+  },
+
+  progressCard: {
+    backgroundColor: '#172F4D',
+    borderRadius: 21,
+    padding: 19,
+    marginTop: 19,
+    borderWidth: 1,
+    borderColor: '#48668A',
+  },
+
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  progressEyebrow: {
+    color: '#AFC8EC',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+  },
+
+  progressTitle: {
+    color: '#FFFFFF',
+    fontSize: 21,
+    fontWeight: '800',
+    marginTop: 5,
+  },
+
+  progressArrow: {
+    color: C.blue,
+    fontSize: 27,
+    fontWeight: '700',
+  },
+
+  progressStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 23,
+    marginBottom: 20,
+  },
+
+  progressStat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+
+  progressIcon: {
+    fontSize: 21,
+    marginBottom: 8,
+  },
+
+  progressNumber: {
+    color: '#FFFFFF',
+    fontSize: 19,
+    fontWeight: '800',
+  },
+
+  progressLabel: {
+    color: '#B8C6DF',
+    fontSize: 9,
+    marginTop: 5,
+    textAlign: 'center',
+  },
+
+  progressDivider: {
+    width: 1,
+    height: 48,
+    backgroundColor: '#405A7B',
+  },
+
+  progressFooter: {
+    borderTopWidth: 1,
+    borderTopColor: '#405A7B',
+    paddingTop: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  progressFooterText: {
+    color: C.blue,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+
+  progressFooterArrow: {
+    color: C.blue,
+    fontSize: 17,
   },
 
   card: {

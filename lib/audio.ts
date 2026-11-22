@@ -33,7 +33,7 @@ const EFFECTS = {
 
 let ambientSound: AudioPlayer | null = null;
 
-const activeEffects = new Set<AudioPlayer>();
+const activeEffects = new Map<AudioPlayer, () => void>();
 
 let currentTheme: SoundTheme = 'silent';
 
@@ -47,6 +47,7 @@ let audioInitialized = false;
 let initializationPromise: Promise<void> | null = null;
 
 let ambientRequestId = 0;
+let cleanupGeneration = 0;
 
 // ==========================================
 // INITIALIZATION
@@ -96,6 +97,14 @@ export function configureAudio(
     0,
     Math.min(1, preferences.effectsVolume / 100)
   );
+
+  if (!effectsEnabled) {
+    stopActiveEffects();
+  }
+
+  if (!musicEnabled) {
+    stopAmbient();
+  }
 }
 
 // ==========================================
@@ -109,6 +118,20 @@ function unloadPlayer(player: AudioPlayer): void {
   } catch (error) {
     console.warn('Audio player cleanup failed:', error);
   }
+}
+
+function stopActiveEffects(): void {
+  const players = Array.from(activeEffects.entries());
+
+  activeEffects.clear();
+
+  players.forEach(([player, removeListener]) => {
+    try {
+      removeListener();
+    } catch {}
+
+    unloadPlayer(player);
+  });
 }
 
 async function unloadAmbient(): Promise<void> {
@@ -129,9 +152,19 @@ async function unloadAmbient(): Promise<void> {
 export async function playAmbient(
   theme: SoundTheme = currentTheme
 ): Promise<void> {
+  const requestId = ++ambientRequestId;
+  const generation = cleanupGeneration;
+
   await initializeAudio();
 
-  if (!musicEnabled || theme === 'silent') {
+  if (
+    requestId !== ambientRequestId ||
+    generation !== cleanupGeneration
+  ) {
+    return;
+  }
+
+  if (!audioInitialized || !musicEnabled || theme === 'silent') {
     await stopAmbient();
     return;
   }
@@ -142,8 +175,6 @@ export async function playAmbient(
     console.warn('Ambient track not found:', theme);
     return;
   }
-
-  const requestId = ++ambientRequestId;
 
   if (ambientSound && currentTheme === theme) {
     if (ambientSound.isLoaded) {
@@ -159,6 +190,13 @@ export async function playAmbient(
 
   await unloadAmbient();
 
+  if (
+    requestId !== ambientRequestId ||
+    generation !== cleanupGeneration
+  ) {
+    return;
+  }
+
   try {
     const player = createAudioPlayer(source, {
       updateInterval: 250,
@@ -167,7 +205,10 @@ export async function playAmbient(
     player.loop = true;
     player.volume = musicVolume;
 
-    if (requestId !== ambientRequestId) {
+    if (
+      requestId !== ambientRequestId ||
+      generation !== cleanupGeneration
+    ) {
       player.remove();
       return;
     }
@@ -225,7 +266,17 @@ export async function playEffect(
 ): Promise<void> {
   if (!effectsEnabled) return;
 
+  const generation = cleanupGeneration;
+
   await initializeAudio();
+
+  if (
+    !audioInitialized ||
+    !effectsEnabled ||
+    generation !== cleanupGeneration
+  ) {
+    return;
+  }
 
   let player: AudioPlayer | null = null;
 
@@ -236,26 +287,35 @@ export async function playEffect(
 
     player.volume = effectsVolume;
 
-    activeEffects.add(player);
-
     const activePlayer = player;
 
     const subscription = player.addListener(
       'playbackStatusUpdate',
       status => {
         if (status.didJustFinish) {
+          const removeListener = activeEffects.get(activePlayer);
+
           activeEffects.delete(activePlayer);
-          subscription.remove();
+
+          removeListener?.();
+
           unloadPlayer(activePlayer);
         }
       }
     );
 
+    activeEffects.set(player, () => subscription.remove());
+
     player.play();
 
   } catch (error) {
     if (player) {
+      const removeListener = activeEffects.get(player);
+
       activeEffects.delete(player);
+
+      removeListener?.();
+
       unloadPlayer(player);
     }
 
@@ -285,6 +345,14 @@ export async function updateEffectsVolume(
   volume: number
 ): Promise<void> {
   effectsVolume = Math.max(0, Math.min(1, volume));
+
+  activeEffects.forEach((_removeListener, player) => {
+    try {
+      player.volume = effectsVolume;
+    } catch (error) {
+      console.warn('Effects volume update failed:', error);
+    }
+  });
 }
 
 // ==========================================
@@ -312,14 +380,11 @@ export async function applyAudioPreferences(
 // ==========================================
 
 export async function cleanupAudio(): Promise<void> {
+  cleanupGeneration++;
+
   await stopAmbient();
 
-  const players = Array.from(activeEffects);
-  activeEffects.clear();
-
-  players.forEach(player => {
-    unloadPlayer(player);
-  });
+  stopActiveEffects();
 }
 
 // ==========================================

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
 import {
   ActivityIndicator,
   Alert,
@@ -26,6 +27,10 @@ import {
 import {
   applyAudioPreferences,
 } from '../lib/audio';
+
+// ========================================
+// ORB OPTIONS
+// ========================================
 
 const ORBS: {
   id: OrbTheme;
@@ -58,6 +63,10 @@ const ORBS: {
     description: 'Warm golden radiance',
   },
 ];
+
+// ========================================
+// SOUND OPTIONS
+// ========================================
 
 const SOUNDS: {
   id: SoundTheme;
@@ -97,12 +106,24 @@ const SOUNDS: {
   },
 ];
 
+// ========================================
+// PREFERENCES SCREEN
+// ========================================
+
 export default function Preferences() {
   const [preferences, setPreferences] =
     useState<UserPreferences>(DEFAULT_PREFERENCES);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const preferencesRef = useRef<UserPreferences>(
+    DEFAULT_PREFERENCES
+  );
+
+  const updateQueue = useRef<Promise<void>>(
+    Promise.resolve()
+  );
 
   // ========================================
   // LOAD PREFERENCES
@@ -112,11 +133,38 @@ export default function Preferences() {
     let active = true;
 
     async function load() {
-      const saved = await loadPreferences();
+      try {
+        const saved = await loadPreferences();
 
-      if (active) {
+        if (!active) return;
+
+        preferencesRef.current = saved;
         setPreferences(saved);
-        setLoading(false);
+
+        await applyAudioPreferences(saved);
+
+      } catch (error) {
+        console.warn('Preference loading failed:', error);
+
+        if (active) {
+          preferencesRef.current = DEFAULT_PREFERENCES;
+
+          setPreferences(DEFAULT_PREFERENCES);
+
+          try {
+            await applyAudioPreferences(DEFAULT_PREFERENCES);
+          } catch (audioError) {
+            console.warn(
+              'Default audio initialization failed:',
+              audioError
+            );
+          }
+        }
+
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
@@ -134,31 +182,38 @@ export default function Preferences() {
   const updatePreference = async (
     changes: Partial<UserPreferences>
   ) => {
-    const updated = {
-      ...preferences,
-      ...changes,
-    };
+    const operation = updateQueue.current.then(async () => {
+      const updated = {
+        ...preferencesRef.current,
+        ...changes,
+      };
 
-    setPreferences(updated);
-    setSaving(true);
+      preferencesRef.current = updated;
 
-    try {
-      await savePreferences(updated);
+      setPreferences(updated);
+      setSaving(true);
 
-      // Apply audio changes immediately.
-      await applyAudioPreferences(updated);
+      try {
+        await savePreferences(updated);
 
-    } catch (error) {
-      console.warn('Preference update failed:', error);
+        await applyAudioPreferences(updated);
 
-      Alert.alert(
-        'Unable to save',
-        'Your preference could not be saved. Please try again.'
-      );
+      } catch (error) {
+        console.warn('Preference update failed:', error);
 
-    } finally {
-      setSaving(false);
-    }
+        Alert.alert(
+          'Unable to save',
+          'Your preference could not be saved. Please try again.'
+        );
+
+      } finally {
+        setSaving(false);
+      }
+    });
+
+    updateQueue.current = operation.catch(() => {});
+
+    await operation;
   };
 
   // ========================================
@@ -189,23 +244,36 @@ export default function Preferences() {
           text: 'Restore',
           style: 'destructive',
           onPress: async () => {
-            try {
-              await resetPreferences();
+            const operation = updateQueue.current.then(async () => {
+              setSaving(true);
 
-              setPreferences(DEFAULT_PREFERENCES);
+              try {
+                await resetPreferences();
 
-              await applyAudioPreferences(
-                DEFAULT_PREFERENCES
-              );
+                preferencesRef.current = DEFAULT_PREFERENCES;
 
-            } catch (error) {
-              console.warn('Reset failed:', error);
+                setPreferences(DEFAULT_PREFERENCES);
 
-              Alert.alert(
-                'Unable to reset',
-                'Please try again.'
-              );
-            }
+                await applyAudioPreferences(
+                  DEFAULT_PREFERENCES
+                );
+
+              } catch (error) {
+                console.warn('Reset failed:', error);
+
+                Alert.alert(
+                  'Unable to reset',
+                  'Please try again.'
+                );
+
+              } finally {
+                setSaving(false);
+              }
+            });
+
+            updateQueue.current = operation.catch(() => {});
+
+            await operation;
           },
         },
       ]

@@ -3,7 +3,11 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { loadPreferences } from '../lib/preferences';
-import { applyAudioPreferences } from '../lib/audio';
+
+import {
+  applyAudioPreferences,
+  cleanupAudio,
+} from '../lib/audio';
 
 export default function RootLayout() {
   useEffect(() => {
@@ -25,12 +29,14 @@ export default function RootLayout() {
 
     return () => {
       mounted = false;
+      cleanupAudio();
     };
   }, []);
 
   return (
     <>
       <StatusBar style="light" />
+
       <Stack
         screenOptions={{
           headerShown: false,

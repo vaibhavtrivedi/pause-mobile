@@ -185,18 +185,11 @@ export default function Bubbles() {
       );
     });
 
-    const activeAnimations = animations.filter(
-      (animation): animation is Animated.CompositeAnimation =>
-        animation !== null,
-    );
-
     floatAnimations.current = animations;
 
-    animations.forEach((animation) => {
-      animation?.start();
-    });
-
-    activeAnimations.forEach((animation) => animation.start());
+animations.forEach((animation) => {
+  animation?.start();
+});
 
     return () => {
       animations.forEach((animation) => animation?.stop());

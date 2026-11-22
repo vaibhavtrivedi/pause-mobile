@@ -1,7 +1,17 @@
 import {
   useEffect,
   useState,
+  useRef,
+  useCallback,
 } from 'react';
+
+import * as Haptics from 'expo-haptics';
+
+import { loadPreferences } from '../lib/preferences';
+import {
+  applyAudioPreferences,
+  AudioEffects,
+} from '../lib/audio';
 
 import {
   ActivityIndicator,
@@ -13,7 +23,7 @@ import {
 } from 'react-native';
 
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 import {
   ResponseScenario,
@@ -30,6 +40,37 @@ export default function Response() {
   const [selected, setSelected] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const hapticsEnabled = useRef(false);
+
+useFocusEffect(
+  useCallback(() => {
+    let active = true;
+
+    async function initializePreferences() {
+      try {
+        const preferences = await loadPreferences();
+
+        if (!active) return;
+
+        hapticsEnabled.current = preferences.hapticsEnabled;
+
+        await applyAudioPreferences(preferences);
+      } catch (error) {
+        console.warn(
+          'Could not load Response Challenge preferences:',
+          error
+        );
+      }
+    }
+
+    initializePreferences();
+
+    return () => {
+      active = false;
+    };
+  }, [])
+);
 
   useEffect(() => {
     let mounted = true;
@@ -73,6 +114,8 @@ export default function Response() {
         scenarios.map(item => item.id)
       );
 
+      AudioEffects.completion();
+
       router.replace({
         pathname: '/complete',
         params: {
@@ -94,8 +137,16 @@ export default function Response() {
       return;
     }
 
-    setCurrentIndex(previous => previous + 1);
-    setSelected('');
+    AudioEffects.transition();
+
+if (hapticsEnabled.current) {
+  Haptics.impactAsync(
+    Haptics.ImpactFeedbackStyle.Light
+  ).catch(() => {});
+}
+
+setCurrentIndex(previous => previous + 1);
+setSelected('');
   };
 
   if (loading) {
@@ -185,7 +236,13 @@ export default function Response() {
           return (
             <Pressable
               key={option.id}
-              onPress={() => setSelected(option.id)}
+              onPress={() => {
+  setSelected(option.id);
+
+  if (hapticsEnabled.current) {
+    Haptics.selectionAsync().catch(() => {});
+  }
+}}
               style={[
                 styles.option,
                 isSelected && styles.selected,
