@@ -44,6 +44,11 @@ jobs:
       - name: Verify Expo dependencies
         run: npx expo install --check
 
+      - name: Check project configuration
+        run: |
+          npx expo config --type public
+          npx expo-doctor  
+
       - name: Verify Expo authentication
         run: eas whoami
         env:
