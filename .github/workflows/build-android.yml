@@ -26,6 +26,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Diagnose Expo packages
+        run: |
+          npm ls expo expo-router expo-linking expo-constants
+          node -e "console.log(require.resolve('expo/package.json'))"
+          node -e "console.log(require.resolve('expo-linking/package.json'))"
+          node -e "console.log(require('expo/package.json').version)"
+          node -e "console.log(require('expo-linking/package.json').version)"
+          grep -n 'bundle-origin' node_modules/expo-linking/build/createURL.js || true
+
+      - name: Validate Expo dependencies
+        run: npx expo install --check  
+
       - name: Align Expo dependencies
         run: npx expo install --fix
 
