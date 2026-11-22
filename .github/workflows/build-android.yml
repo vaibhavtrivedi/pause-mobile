@@ -48,6 +48,9 @@ jobs:
       - name: Check project configuration
         run: |
           node ./node_modules/expo/bin/cli config --type public
+
+      - name: Verify Expo Doctor configuration
+        run: node -e "console.log(JSON.stringify(require('./package.json').expo.doctor, null, 2))"
       
       - name: Run Expo Doctor
         run: |
