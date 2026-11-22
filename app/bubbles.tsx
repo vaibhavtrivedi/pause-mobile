@@ -16,9 +16,9 @@ const AMBIENT_TRACKS: Partial<Record<SoundTheme, number>> = {
 };
 
 const EFFECTS = {
-  bubblePop: require('../assets/audio/effects/bubble-pop.mp3'),
-  transition: require('../assets/audio/effects/transition.mp3'),
-  completion: require('../assets/audio/effects/completion.mp3'),
+  bubblePop: require('../assets/audio/effects/bubble-pop.wav'),
+  transition: require('../assets/audio/effects/transition.wav'),
+  completion: require('../assets/audio/effects/completion.wav'),
 };
 
 // ==========================================
