@@ -135,6 +135,30 @@ export default function Breathing() {
       : 'exhale';
 
   // ========================================
+  // THEME ANIMATION VALUES
+  // ========================================
+
+  const themeRotation = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const reverseRotation = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['360deg', '0deg'],
+  });
+
+  const rippleScale = particleMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.65, 1.15, 1.65],
+  });
+
+  const rippleOpacity = particleMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.65, 0.3, 0.02],
+  });
+
+  // ========================================
   // PREFERENCES
   // ========================================
 
@@ -334,7 +358,7 @@ export default function Breathing() {
   ]);
 
   // ========================================
-  // PARTICLE ANIMATION
+  // PARTICLE / THEME ANIMATION
   // ========================================
 
   useEffect(() => {
@@ -386,14 +410,10 @@ export default function Breathing() {
 
       setRunning(false);
       stopAnimation();
-
-      // Ambient music deliberately continues playing.
     } else {
       runningRef.current = true;
 
       setRunning(true);
-
-      // Ambient music continues without restarting.
     }
   };
 
@@ -417,8 +437,6 @@ export default function Breathing() {
 
   const leave = () => {
     stopAnimation();
-
-    // Do not unload shared ambient audio here.
     router.replace('/choose');
   };
 
@@ -429,12 +447,10 @@ export default function Breathing() {
   useEffect(() => {
     if (finished && !completionPlayed.current) {
       completionPlayed.current = true;
-
       AudioEffects.completion();
     }
   }, [finished]);
 
-  // Stop animation when the component unmounts.
   useEffect(() => {
     return () => {
       stopAnimation();
@@ -556,6 +572,10 @@ export default function Breathing() {
           Breathe gently, at a pace that feels comfortable.
         </Text>
 
+        {/* ================================= */}
+        {/* THEME-SPECIFIC ORB STAGE */}
+        {/* ================================= */}
+
         <View style={styles.orbStage}>
           {!preferences.reducedMotion && (
             <Animated.View
@@ -573,76 +593,216 @@ export default function Breathing() {
             />
           )}
 
-          {PARTICLES.map((particle, index) => (
-            <Animated.View
-              key={index}
-              style={[
-                styles.particle,
-                {
-                  width: particle.size,
-                  height: particle.size,
-                  borderRadius: particle.size,
-                  backgroundColor: theme.particle,
-                  left: '50%',
-                  top: '50%',
-                  opacity: preferences.reducedMotion
-                    ? 0.5
-                    : particleMotion.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.25, 0.9],
-                      }),
-                  transform: [
-                    { translateX: particle.x },
+          {/* ENERGY THEME */}
+
+          {preferences.orbTheme === 'energy' && (
+            <>
+              {PARTICLES.map((particle, index) => (
+                <Animated.View
+                  key={index}
+                  style={[
+                    styles.energyParticle,
                     {
-                      translateY: preferences.reducedMotion
-                        ? particle.y
+                      width: particle.size + 2,
+                      height: particle.size + 2,
+                      left: '50%',
+                      top: '50%',
+                      backgroundColor: theme.particle,
+                      opacity: preferences.reducedMotion
+                        ? 0.5
                         : particleMotion.interpolate({
                             inputRange: [0, 1],
-                            outputRange: [
-                              particle.y,
-                              particle.y - 15,
-                            ],
+                            outputRange: [0.2, 1],
                           }),
+                      transform: [
+                        { translateX: particle.x },
+                        {
+                          translateY: preferences.reducedMotion
+                            ? particle.y
+                            : particleMotion.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [
+                                  particle.y,
+                                  particle.y - 20,
+                                ],
+                              }),
+                        },
+                      ],
                     },
-                  ],
-                },
-              ]}
-            />
-          ))}
+                  ]}
+                />
+              ))}
 
-          <Animated.View
-            style={[
-              styles.orbOuter,
-              {
-                backgroundColor: theme.primary,
-                borderColor: theme.secondary,
-                transform: [{ scale }],
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.orbRing,
-                { borderColor: theme.secondary },
-              ]}
-            />
-
-            <View
-              style={[
-                styles.orbMiddle,
-                { backgroundColor: theme.secondary },
-              ]}
-            >
-              <View
+              <Animated.View
                 style={[
-                  styles.orbInner,
-                  { backgroundColor: theme.core },
+                  styles.energyOrb,
+                  {
+                    transform: [{ scale }],
+                    borderColor: theme.secondary,
+                  },
                 ]}
               >
-                <Text style={styles.orbStar}>✦</Text>
-              </View>
-            </View>
-          </Animated.View>
+                <LinearGradient
+                  colors={[
+                    theme.core,
+                    theme.secondary,
+                    theme.primary,
+                  ]}
+                  style={styles.energyGradient}
+                >
+                  <Text style={styles.energyStar}>✦</Text>
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
+
+          {/* AURORA THEME */}
+
+          {preferences.orbTheme === 'aurora' && (
+            <>
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  {
+                    borderColor: '#72F5D0',
+                    transform: [{ rotate: themeRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  styles.auroraRibbonTwo,
+                  {
+                    borderColor: '#A1A8FF',
+                    transform: [{ rotate: reverseRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraRibbon,
+                  styles.auroraRibbonThree,
+                  {
+                    borderColor: '#65D9F2',
+                    transform: [{ rotate: themeRotation }],
+                  },
+                ]}
+              />
+
+              <Animated.View
+                style={[
+                  styles.auroraCore,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#D6FFF0', '#62DDBB', '#246E83']}
+                  style={styles.auroraGradient}
+                >
+                  <View style={styles.auroraHighlight} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
+
+          {/* RIPPLE THEME */}
+
+          {preferences.orbTheme === 'ripple' && (
+            <>
+              {[0, 1, 2].map(index => (
+                <Animated.View
+                  key={index}
+                  style={[
+                    styles.rippleRing,
+                    {
+                      borderColor: theme.secondary,
+                      opacity: preferences.reducedMotion
+                        ? 0.35
+                        : rippleOpacity,
+                      transform: [
+                        {
+                          scale: preferences.reducedMotion
+                            ? 0.85 + index * 0.3
+                            : particleMotion.interpolate({
+                                inputRange: [0, 0.5, 1],
+                                outputRange: [
+                                  0.65 + index * 0.25,
+                                  1.15 + index * 0.25,
+                                  1.65 + index * 0.25,
+                                ],
+                              }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              ))}
+
+              <Animated.View
+                style={[
+                  styles.waterOrb,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#D8FAFF', '#69C7E8', '#155578']}
+                  style={styles.waterGradient}
+                >
+                  <View style={styles.waterHighlight} />
+                  <View style={styles.waterHighlightTwo} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
+
+          {/* SOLAR THEME */}
+
+          {preferences.orbTheme === 'solar' && (
+            <>
+              <Animated.View
+                style={[
+                  styles.solarRays,
+                  {
+                    transform: [
+                      { rotate: themeRotation },
+                      { scale },
+                    ],
+                  },
+                ]}
+              >
+                {Array.from({ length: 12 }).map((_, index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.solarRay,
+                      {
+                        transform: [
+                          { rotate: `${index * 30}deg` },
+                        ],
+                      },
+                    ]}
+                  />
+                ))}
+              </Animated.View>
+
+              <Animated.View
+                style={[
+                  styles.solarOrb,
+                  { transform: [{ scale }] },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#FFF8D7', '#FFC66F', '#D87935']}
+                  style={styles.solarGradient}
+                >
+                  <View style={styles.solarHighlight} />
+                </LinearGradient>
+              </Animated.View>
+            </>
+          )}
         </View>
 
         <Text style={styles.phase}>
@@ -790,55 +950,189 @@ const styles = StyleSheet.create({
     borderRadius: 150,
   },
 
-  particle: {
+  // ENERGY
+
+  energyParticle: {
     position: 'absolute',
-    marginLeft: -2,
-    marginTop: -2,
+    borderRadius: 20,
+    marginLeft: -3,
+    marginTop: -3,
     elevation: 8,
   },
 
-  orbOuter: {
+  energyOrb: {
     width: 205,
     height: 205,
-    borderRadius: 120,
+    borderRadius: 110,
     borderWidth: 2,
+    padding: 8,
+    shadowColor: '#8FC8FF',
+    shadowOpacity: 0.8,
+    shadowRadius: 35,
+    elevation: 20,
+  },
+
+  energyGradient: {
+    flex: 1,
+    borderRadius: 110,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#8FC8FF',
-    shadowOpacity: 0.55,
-    shadowRadius: 35,
-    elevation: 18,
   },
 
-  orbRing: {
+  energyStar: {
+    color: '#31547D',
+    fontSize: 48,
+  },
+
+  // AURORA
+
+  auroraRibbon: {
     position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 100,
-    borderWidth: 1,
-    opacity: 0.6,
+    width: 155,
+    height: 245,
+    borderWidth: 5,
+    borderRadius: 130,
+    opacity: 0.65,
   },
 
-  orbMiddle: {
+  auroraRibbonTwo: {
+    width: 190,
+    height: 225,
+    borderWidth: 4,
+    opacity: 0.55,
+  },
+
+  auroraRibbonThree: {
+    width: 220,
+    height: 175,
+    borderWidth: 3,
+    opacity: 0.4,
+  },
+
+  auroraCore: {
     width: 145,
     height: 145,
+    borderRadius: 90,
+    overflow: 'hidden',
+    elevation: 15,
+  },
+
+  auroraGradient: {
+    flex: 1,
     borderRadius: 90,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  orbInner: {
-    width: 95,
-    height: 95,
-    borderRadius: 60,
+  auroraHighlight: {
+    width: 65,
+    height: 65,
+    borderRadius: 40,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+    transform: [{ translateY: -15 }],
+  },
+
+  // RIPPLE
+
+  rippleRing: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 100,
+    borderWidth: 2,
+  },
+
+  waterOrb: {
+    width: 155,
+    height: 155,
+    borderRadius: 90,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#A5ECFF',
+    elevation: 20,
+  },
+
+  waterGradient: {
+    flex: 1,
+    borderRadius: 90,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  orbStar: {
-    fontSize: 38,
-    color: '#31547D',
+  waterHighlight: {
+    position: 'absolute',
+    width: 95,
+    height: 30,
+    borderRadius: 50,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+    top: 28,
+    left: 25,
+    transform: [{ rotate: '-35deg' }],
   },
+
+  waterHighlightTwo: {
+    position: 'absolute',
+    width: 50,
+    height: 15,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.2,
+    bottom: 35,
+    right: 25,
+  },
+
+  // SOLAR
+
+  solarRays: {
+    position: 'absolute',
+    width: 245,
+    height: 245,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  solarRay: {
+    position: 'absolute',
+    width: 9,
+    height: 45,
+    borderRadius: 10,
+    backgroundColor: '#FFC978',
+    top: 0,
+    opacity: 0.85,
+  },
+
+  solarOrb: {
+    width: 155,
+    height: 155,
+    borderRadius: 90,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#FFE6A5',
+    elevation: 25,
+    shadowColor: '#FFB34F',
+    shadowOpacity: 0.9,
+    shadowRadius: 35,
+  },
+
+  solarGradient: {
+    flex: 1,
+    borderRadius: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  solarHighlight: {
+    width: 75,
+    height: 75,
+    borderRadius: 50,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.3,
+    transform: [{ translateY: -18 }],
+  },
+
+  // SESSION UI
 
   phase: {
     color: '#FFFFFF',
