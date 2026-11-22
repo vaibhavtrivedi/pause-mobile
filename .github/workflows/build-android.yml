@@ -56,6 +56,9 @@ jobs:
         run: |
           npx --yes expo-doctor  
 
+      - name: Fix Expo CLI permissions
+        run: chmod +x ./node_modules/expo/bin/cli
+
       - name: Verify Expo authentication
         run: eas whoami
         env:
