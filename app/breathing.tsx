@@ -108,6 +108,7 @@ export default function Breathing() {
     useState<UserPreferences>(DEFAULT_PREFERENCES);
 
   const [loaded, setLoaded] = useState(false);
+  const [orbReady, setOrbReady] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [running, setRunning] = useState(true);
   const [finished, setFinished] = useState(false);
@@ -146,11 +147,6 @@ export default function Breathing() {
   const reverseRotation = particleMotion.interpolate({
     inputRange: [0, 1],
     outputRange: ['360deg', '0deg'],
-  });
-
-  const rippleScale = particleMotion.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0.65, 1.15, 1.65],
   });
 
   const rippleOpacity = particleMotion.interpolate({
@@ -210,7 +206,8 @@ export default function Breathing() {
     if (
       !runningRef.current ||
       finishedRef.current ||
-      !loaded
+      !loaded ||
+      !orbReady
     ) {
       return;
     }
@@ -283,22 +280,36 @@ export default function Breathing() {
     });
   }, [
     loaded,
+    orbReady,
     scale,
     glow,
     stopAnimation,
   ]);
 
+  // Wait until the orb has rendered before starting its animation.
   useEffect(() => {
-    if (!loaded || !running || finished) {
+    if (!loaded || !orbReady || !running || finished) {
       stopAnimation();
       return;
     }
 
-    startOrbAnimation();
+    let firstFrame = 0;
+    let secondFrame = 0;
 
-    return stopAnimation;
+    firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        startOrbAnimation();
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+      stopAnimation();
+    };
   }, [
     loaded,
+    orbReady,
     running,
     finished,
     startOrbAnimation,
@@ -364,6 +375,7 @@ export default function Breathing() {
   useEffect(() => {
     if (
       !loaded ||
+      !orbReady ||
       !running ||
       preferences.reducedMotion
     ) {
@@ -395,6 +407,7 @@ export default function Breathing() {
     return () => animation.stop();
   }, [
     loaded,
+    orbReady,
     running,
     preferences.reducedMotion,
     particleMotion,
@@ -572,11 +585,12 @@ export default function Breathing() {
           Breathe gently, at a pace that feels comfortable.
         </Text>
 
-        {/* ================================= */}
         {/* THEME-SPECIFIC ORB STAGE */}
-        {/* ================================= */}
 
-        <View style={styles.orbStage}>
+        <View
+          style={styles.orbStage}
+          onLayout={() => setOrbReady(true)}
+        >
           {!preferences.reducedMotion && (
             <Animated.View
               style={[
