@@ -52,7 +52,7 @@ const THEMES: Record<
   }
 > = {
   energy: {
-    background: ['#071326', '#102747', '#172D46'],
+    background: ['#050E20', '#0B1D38', '#142B49'],
     primary: '#416FAE',
     secondary: '#83B9F5',
     core: '#D9EDFF',
@@ -119,6 +119,10 @@ export default function Breathing() {
 
   const cycle = useRef<Animated.CompositeAnimation | null>(null);
 
+  const phaseRef = useRef<Phase>('inhale');
+  const phaseRemainingMsRef = useRef(INHALE_SECONDS * 1000);
+  const phaseStartedAtRef = useRef(0);
+
   const elapsedRef = useRef(0);
   const runningRef = useRef(true);
   const finishedRef = useRef(false);
@@ -152,6 +156,21 @@ export default function Breathing() {
   const rippleOpacity = particleMotion.interpolate({
     inputRange: [0, 0.5, 1],
     outputRange: [0.65, 0.3, 0.02],
+  });
+
+  const energyHighlightX = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-13, 13],
+  });
+
+  const energyHighlightY = particleMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-12, 10],
+  });
+
+  const energyPulse = particleMotion.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.65, 1, 0.65],
   });
 
   // ========================================
@@ -194,127 +213,170 @@ export default function Breathing() {
   );
 
   // ========================================
-  // ANIMATION CONTROL
-  // ========================================
+// ANIMATION CONTROL
+// ========================================
 
-  const stopAnimation = useCallback(() => {
-    cycle.current?.stop();
+const stopAnimation = useCallback(() => {
+  if (cycle.current && phaseStartedAtRef.current) {
+    const elapsedMs =
+      Date.now() - phaseStartedAtRef.current;
+
+    phaseRemainingMsRef.current = Math.max(
+      0,
+      phaseRemainingMsRef.current - elapsedMs
+    );
+  }
+
+  cycle.current?.stop();
+  cycle.current = null;
+  phaseStartedAtRef.current = 0;
+}, []);
+
+const startOrbAnimation = useCallback(() => {
+  if (
+    !runningRef.current ||
+    finishedRef.current ||
+    !loaded ||
+    !orbReady
+  ) {
+    return;
+  }
+
+  const inhale = phaseRef.current === 'inhale';
+
+  const phaseDuration = inhale
+    ? INHALE_SECONDS * 1000
+    : EXHALE_SECONDS * 1000;
+
+  const remainingDuration = Math.max(
+    1,
+    Math.min(
+      phaseRemainingMsRef.current,
+      phaseDuration
+    )
+  );
+
+  const progress =
+    1 - remainingDuration / phaseDuration;
+
+  const fromScale = inhale
+    ? 0.82 + progress * 0.30
+    : 1.12 - progress * 0.30;
+
+  const toScale = inhale ? 1.12 : 0.82;
+
+  const fromGlow = inhale
+    ? 0.25 + progress * 0.65
+    : 0.90 - progress * 0.65;
+
+  const toGlow = inhale ? 0.90 : 0.25;
+
+  // Keep orbital rotation synchronized with breathing.
+  const cyclePosition = inhale
+  ? 1 - progress * 0.6
+  : 0.4 + progress * 0.6;
+
+  scale.setValue(fromScale);
+  glow.setValue(fromGlow);
+  particleMotion.setValue(cyclePosition);
+
+  phaseStartedAtRef.current = Date.now();
+
+  const animations = [
+    Animated.timing(scale, {
+      toValue: toScale,
+      duration: remainingDuration,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    }),
+
+    Animated.timing(glow, {
+      toValue: toGlow,
+      duration: remainingDuration,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    }),
+  ];
+
+  if (!reducedMotionRef.current) {
+    animations.push(
+      Animated.timing(particleMotion, {
+        toValue: inhale ? 0.4 : 1,
+        duration: remainingDuration,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      })
+    );
+  }
+
+  const animation = Animated.parallel(animations);
+
+  cycle.current = animation;
+
+  animation.start(({ finished: completed }) => {
     cycle.current = null;
-  }, []);
+    phaseStartedAtRef.current = 0;
 
-  const startOrbAnimation = useCallback(() => {
     if (
+      !completed ||
       !runningRef.current ||
-      finishedRef.current ||
-      !loaded ||
-      !orbReady
+      finishedRef.current
     ) {
       return;
     }
 
-    stopAnimation();
+    // Move to the next breathing phase.
+    if (phaseRef.current === 'inhale') {
+      phaseRef.current = 'exhale';
 
-    const position =
-      elapsedRef.current % BREATH_CYCLE_SECONDS;
+      phaseRemainingMsRef.current =
+        EXHALE_SECONDS * 1000;
+    } else {
+      phaseRef.current = 'inhale';
 
-    const inhale = position < INHALE_SECONDS;
-
-    const progress = inhale
-      ? position / INHALE_SECONDS
-      : (position - INHALE_SECONDS) / EXHALE_SECONDS;
-
-    const fromScale = inhale
-      ? 0.82 + progress * 0.30
-      : 1.12 - progress * 0.30;
-
-    const toScale = inhale ? 1.12 : 0.82;
-
-    const fromGlow = inhale
-      ? 0.25 + progress * 0.65
-      : 0.90 - progress * 0.65;
-
-    const toGlow = inhale ? 0.90 : 0.25;
-
-    const remainingSeconds = inhale
-      ? INHALE_SECONDS - position
-      : BREATH_CYCLE_SECONDS - position;
-
-    const duration = Math.max(
-      100,
-      remainingSeconds * 1000
-    );
-
-    scale.setValue(fromScale);
-    glow.setValue(fromGlow);
-
-    const animation = Animated.parallel([
-      Animated.timing(scale, {
-        toValue: toScale,
-        duration: reducedMotionRef.current
-          ? Math.min(duration, 1500)
-          : duration,
-        easing: Easing.inOut(Easing.ease),
-        useNativeDriver: true,
-      }),
-
-      Animated.timing(glow, {
-        toValue: toGlow,
-        duration: reducedMotionRef.current
-          ? Math.min(duration, 1500)
-          : duration,
-        easing: Easing.inOut(Easing.ease),
-        useNativeDriver: true,
-      }),
-    ]);
-
-    cycle.current = animation;
-
-    animation.start(({ finished: completed }) => {
-      if (
-        completed &&
-        runningRef.current &&
-        !finishedRef.current
-      ) {
-        startOrbAnimation();
-      }
-    });
-  }, [
-    loaded,
-    orbReady,
-    scale,
-    glow,
-    stopAnimation,
-  ]);
-
-  // Wait until the orb has rendered before starting its animation.
-  useEffect(() => {
-    if (!loaded || !orbReady || !running || finished) {
-      stopAnimation();
-      return;
+      phaseRemainingMsRef.current =
+        INHALE_SECONDS * 1000;
     }
 
-    let firstFrame = 0;
-    let secondFrame = 0;
+    startOrbAnimation();
+  });
+}, [
+  loaded,
+  orbReady,
+  scale,
+  glow,
+  particleMotion,
+]);
 
-    firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        startOrbAnimation();
-      });
+// Wait until the orb has rendered before starting its animation.
+useEffect(() => {
+  if (!loaded || !orbReady || !running || finished) {
+    stopAnimation();
+    return;
+  }
+
+  let firstFrame = 0;
+  let secondFrame = 0;
+
+  firstFrame = requestAnimationFrame(() => {
+    secondFrame = requestAnimationFrame(() => {
+      startOrbAnimation();
     });
+  });
 
-    return () => {
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-      stopAnimation();
-    };
-  }, [
-    loaded,
-    orbReady,
-    running,
-    finished,
-    startOrbAnimation,
-    stopAnimation,
-  ]);
+  return () => {
+    cancelAnimationFrame(firstFrame);
+    cancelAnimationFrame(secondFrame);
+    stopAnimation();
+  };
+}, [
+  loaded,
+  orbReady,
+  running,
+  finished,
+  startOrbAnimation,
+  stopAnimation,
+]);
 
   // ========================================
   // SESSION TIMER
@@ -368,50 +430,6 @@ export default function Breathing() {
     preferences.hapticsEnabled,
   ]);
 
-  // ========================================
-  // PARTICLE / THEME ANIMATION
-  // ========================================
-
-  useEffect(() => {
-    if (
-      !loaded ||
-      !orbReady ||
-      !running ||
-      preferences.reducedMotion
-    ) {
-      particleMotion.stopAnimation();
-      particleMotion.setValue(0);
-      return;
-    }
-
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(particleMotion, {
-          toValue: 1,
-          duration: 4000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-
-        Animated.timing(particleMotion, {
-          toValue: 0,
-          duration: 4000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-
-    animation.start();
-
-    return () => animation.stop();
-  }, [
-    loaded,
-    orbReady,
-    running,
-    preferences.reducedMotion,
-    particleMotion,
-  ]);
 
   // ========================================
   // SESSION CONTROLS
@@ -431,22 +449,38 @@ export default function Breathing() {
   };
 
   const reset = () => {
-    stopAnimation();
+  const wasAlreadyRunning =
+    runningRef.current && !finishedRef.current;
 
-    elapsedRef.current = 0;
-    runningRef.current = true;
-    finishedRef.current = false;
+  stopAnimation();
 
-    setElapsed(0);
-    setFinished(false);
-    setRunning(true);
+  elapsedRef.current = 0;
+  runningRef.current = true;
+  finishedRef.current = false;
 
-    lastPhase.current = 'inhale';
-    completionPlayed.current = false;
+  setElapsed(0);
+  setFinished(false);
+  setRunning(true);
 
-    scale.setValue(0.82);
-    glow.setValue(0.25);
-  };
+  phaseRef.current = 'inhale';
+  phaseRemainingMsRef.current = INHALE_SECONDS * 1000;
+  phaseStartedAtRef.current = 0;
+
+  particleMotion.setValue(1);
+
+  lastPhase.current = 'inhale';
+  completionPlayed.current = false;
+
+  scale.setValue(0.82);
+  glow.setValue(0.25);
+
+  // Restart explicitly when resetting an active session.
+  if (wasAlreadyRunning && loaded && orbReady) {
+    requestAnimationFrame(() => {
+      startOrbAnimation();
+    });
+  }
+};
 
   const leave = () => {
     stopAnimation();
@@ -611,9 +645,63 @@ export default function Breathing() {
 
           {preferences.orbTheme === 'energy' && (
             <>
+              {/* Atmospheric halo */}
+
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.energyHalo,
+                  {
+                    opacity: preferences.reducedMotion
+                      ? 0.45
+                      : energyPulse,
+                    transform: [{ scale }],
+                  },
+                ]}
+              />
+
+              {/* Rotating orbital glass rings */}
+
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.energyOrbit,
+                  styles.energyOrbitOuter,
+                  {
+                    borderColor: '#75BFFF',
+                    opacity: 0.55,
+                    transform: [
+                      { rotate: themeRotation },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.energyOrbitNode} />
+              </Animated.View>
+
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.energyOrbit,
+                  styles.energyOrbitInner,
+                  {
+                    borderColor: '#C0E7FF',
+                    opacity: 0.65,
+                    transform: [
+                      { rotate: reverseRotation },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.energyOrbitNodeSmall} />
+              </Animated.View>
+
+              {/* Floating energy particles */}
+
               {PARTICLES.map((particle, index) => (
                 <Animated.View
                   key={index}
+                  pointerEvents="none"
                   style={[
                     styles.energyParticle,
                     {
@@ -647,25 +735,83 @@ export default function Breathing() {
                 />
               ))}
 
+              {/* Main breathing sphere */}
+
               <Animated.View
                 style={[
-                  styles.energyOrb,
+                  styles.energyOrbAssembly,
                   {
                     transform: [{ scale }],
-                    borderColor: theme.secondary,
                   },
                 ]}
               >
-                <LinearGradient
-                  colors={[
-                    theme.core,
-                    theme.secondary,
-                    theme.primary,
-                  ]}
-                  style={styles.energyGradient}
-                >
-                  <Text style={styles.energyStar}>✦</Text>
-                </LinearGradient>
+                {/* Outer glass shell */}
+
+                <View style={styles.energyShell}>
+                  <LinearGradient
+                    colors={[
+                      'rgba(191,226,255,0.38)',
+                      'rgba(67,130,193,0.16)',
+                      'rgba(17,48,87,0.58)',
+                    ]}
+                    style={styles.energyShellGradient}
+                  >
+                    {/* Inner luminous sphere */}
+
+                    <View style={styles.energyInnerSphere}>
+                      <LinearGradient
+                        colors={[
+                          '#EAF8FF',
+                          '#A7D8FF',
+                          '#5596D7',
+                          '#1E4D83',
+                        ]}
+                        locations={[0, 0.25, 0.65, 1]}
+                        style={styles.energyInnerGradient}
+                      >
+                        {/* Bright inner core */}
+
+                        <View style={styles.energyCore}>
+                          <LinearGradient
+                            colors={[
+                              '#FFFFFF',
+                              '#D7F0FF',
+                              '#91CCFF',
+                            ]}
+                            style={styles.energyCoreGradient}
+                          />
+                        </View>
+
+                        {/* Moving reflective highlight */}
+
+                        {!preferences.reducedMotion && (
+                          <Animated.View
+                            pointerEvents="none"
+                            style={[
+                              styles.energyHighlight,
+                              {
+                                transform: [
+                                  { translateX: energyHighlightX },
+                                  { translateY: energyHighlightY },
+                                ],
+                              },
+                            ]}
+                          />
+                        )}
+
+                        <View style={styles.energyLowerShade} />
+                      </LinearGradient>
+                    </View>
+
+                    {/* Glass reflection */}
+
+                    <View style={styles.energyGlassReflection} />
+                  </LinearGradient>
+                </View>
+
+                {/* Outer luminous edge */}
+
+                <View style={styles.energyRim} />
               </Animated.View>
             </>
           )}
@@ -966,36 +1112,177 @@ const styles = StyleSheet.create({
 
   // ENERGY
 
+  energyHalo: {
+    position: 'absolute',
+    width: 255,
+    height: 255,
+    borderRadius: 130,
+    borderWidth: 1,
+    borderColor: '#73BFFF',
+    backgroundColor: 'rgba(49,125,194,0.07)',
+  },
+
+  energyOrbit: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    borderWidth: 1.5,
+    borderRadius: 150,
+  },
+
+  energyOrbitOuter: {
+    width: 255,
+    height: 175,
+  },
+
+  energyOrbitInner: {
+    width: 225,
+    height: 205,
+    borderWidth: 1,
+  },
+
+  energyOrbitNode: {
+    width: 9,
+    height: 9,
+    borderRadius: 6,
+    backgroundColor: '#C8EBFF',
+    marginTop: -5,
+    shadowColor: '#8DCFFF',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+
+  energyOrbitNodeSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+    marginTop: -3,
+    shadowColor: '#B5E5FF',
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
   energyParticle: {
     position: 'absolute',
     borderRadius: 20,
     marginLeft: -3,
     marginTop: -3,
     elevation: 8,
+    shadowColor: '#A5D9FF',
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
   },
 
-  energyOrb: {
-    width: 205,
-    height: 205,
-    borderRadius: 110,
-    borderWidth: 2,
-    padding: 8,
-    shadowColor: '#8FC8FF',
-    shadowOpacity: 0.8,
-    shadowRadius: 35,
-    elevation: 20,
-  },
-
-  energyGradient: {
-    flex: 1,
-    borderRadius: 110,
+  energyOrbAssembly: {
+    width: 190,
+    height: 190,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  energyStar: {
-    color: '#31547D',
-    fontSize: 48,
+  energyShell: {
+    width: 190,
+    height: 190,
+    borderRadius: 100,
+    padding: 9,
+    borderWidth: 1.5,
+    borderColor: 'rgba(191,226,255,0.85)',
+    backgroundColor: 'rgba(103,167,224,0.16)',
+    shadowColor: '#78BDFF',
+    shadowOpacity: 0.85,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 22,
+  },
+
+  energyShellGradient: {
+    flex: 1,
+    borderRadius: 100,
+    padding: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(219,242,255,0.55)',
+  },
+
+  energyInnerSphere: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 100,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(222,244,255,0.7)',
+  },
+
+  energyInnerGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+
+  energyCore: {
+    width: 75,
+    height: 75,
+    borderRadius: 45,
+    padding: 4,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 1,
+    shadowRadius: 25,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 18,
+  },
+
+  energyCoreGradient: {
+    flex: 1,
+    borderRadius: 45,
+    backgroundColor: '#FFFFFF',
+  },
+
+  energyHighlight: {
+    position: 'absolute',
+    width: 95,
+    height: 42,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    top: 24,
+    left: 30,
+    transform: [{ rotate: '-38deg' }],
+  },
+
+  energyLowerShade: {
+    position: 'absolute',
+    width: 160,
+    height: 65,
+    borderRadius: 100,
+    backgroundColor: 'rgba(5,35,75,0.22)',
+    bottom: -32,
+  },
+
+  energyGlassReflection: {
+    position: 'absolute',
+    width: 50,
+    height: 115,
+    borderRadius: 40,
+    borderLeftWidth: 2,
+    borderLeftColor: 'rgba(255,255,255,0.55)',
+    top: 15,
+    left: 12,
+    transform: [{ rotate: '18deg' }],
+  },
+
+  energyRim: {
+    position: 'absolute',
+    width: 177,
+    height: 177,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: 'rgba(229,246,255,0.55)',
   },
 
   // AURORA

@@ -1,10 +1,4 @@
-import React, {
-  memo,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   View,
@@ -13,26 +7,26 @@ import {
   StyleSheet,
   Animated,
   Easing,
-} from 'react-native';
+} from "react-native";
 
-import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import * as Haptics from 'expo-haptics';
+import { LinearGradient } from "expo-linear-gradient";
+import { router, useFocusEffect } from "expo-router";
+import * as Haptics from "expo-haptics";
 
-import { loadPreferences } from '../lib/preferences';
-import { applyAudioPreferences, AudioEffects } from '../lib/audio';
+import { loadPreferences } from "../lib/preferences";
+import { applyAudioPreferences, AudioEffects } from "../lib/audio";
 
 // ==========================================
 // CONSTANTS
 // ==========================================
 
 const WORDS = [
-  'Pressure',
-  'Frustration',
-  'Expectations',
-  'Worry',
-  'Impatience',
-  'Tension',
+  "Pressure",
+  "Frustration",
+  "Expectations",
+  "Worry",
+  "Impatience",
+  "Tension",
 ];
 
 const TOTAL_BUBBLES = WORDS.length;
@@ -75,25 +69,16 @@ const Bubble = memo(function Bubble({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={
-          released
-            ? `${word}, released`
-            : `Release ${word} bubble`
+          released ? `${word}, released` : `Release ${word} bubble`
         }
         accessibilityState={{ disabled: released }}
         disabled={released}
         onPress={() => onRelease(index)}
-        style={[
-          styles.bubble,
-          released && styles.popped,
-        ]}
+        style={[styles.bubble, released && styles.popped]}
       >
-        <Text style={styles.bubbleIcon}>
-          {released ? '✓' : '◌'}
-        </Text>
+        <Text style={styles.bubbleIcon}>{released ? "✓" : "◌"}</Text>
 
-        <Text style={styles.word}>
-          {released ? 'Released' : word}
-        </Text>
+        <Text style={styles.word}>{released ? "Released" : word}</Text>
       </Pressable>
     </Animated.View>
   );
@@ -107,55 +92,76 @@ export default function Bubbles() {
   const [done, setDone] = useState<number[]>([]);
   const [reducedMotion, setReducedMotion] = useState(false);
 
+  const [focused, setFocused] = useState(false);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+
   const hapticsEnabled = useRef(false);
   const startedAt = useRef(Date.now());
   const finished = useRef(false);
 
   // Create animation values only once.
-  const floats = useRef(
-    WORDS.map(() => new Animated.Value(0))
-  ).current;
+  const floats = useRef(WORDS.map(() => new Animated.Value(0))).current;
+
+  const floatAnimations = useRef<(Animated.CompositeAnimation | null)[]>([]);
 
   // ========================================
   // LOAD USER PREFERENCES
   // ========================================
 
-  useEffect(() => {
-    let active = true;
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
 
-    const initialize = async () => {
-      try {
-        const preferences = await loadPreferences();
+      setFocused(true);
+      setPreferencesLoaded(false);
 
-        if (!active) return;
+      const initialize = async () => {
+        try {
+          const preferences = await loadPreferences();
 
-        setReducedMotion(preferences.reducedMotion);
-        hapticsEnabled.current = preferences.hapticsEnabled;
+          if (!active) return;
 
-        await applyAudioPreferences(preferences);
-      } catch (error) {
-        console.warn('Could not load bubble preferences:', error);
-      }
-    };
+          setReducedMotion(preferences.reducedMotion);
+          hapticsEnabled.current = preferences.hapticsEnabled;
 
-    initialize();
+          await applyAudioPreferences(preferences);
+        } catch (error) {
+          console.warn("Could not load bubble preferences:", error);
+        } finally {
+          if (active) {
+            setPreferencesLoaded(true);
+          }
+        }
+      };
 
-    return () => {
-      active = false;
-    };
-  }, []);
+      initialize();
+
+      return () => {
+        active = false;
+        setFocused(false);
+      };
+    }, []),
+  );
 
   // ========================================
   // FLOATING ANIMATIONS
   // ========================================
 
   useEffect(() => {
+    if (!focused || !preferencesLoaded) {
+      return;
+    }
+
     if (reducedMotion) {
-      floats.forEach(value => value.setValue(0));
+      floats.forEach((value) => value.setValue(0));
       return;
     }
 
     const animations = floats.map((value, index) => {
+      if (done.includes(index)) {
+        return null;
+      }
+
       const duration = 1800 + index * 180;
 
       return Animated.loop(
@@ -175,23 +181,35 @@ export default function Bubbles() {
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-        ])
+        ]),
       );
     });
 
-    animations.forEach(animation => animation.start());
+    const activeAnimations = animations.filter(
+      (animation): animation is Animated.CompositeAnimation =>
+        animation !== null,
+    );
+
+    floatAnimations.current = animations;
+
+    animations.forEach((animation) => {
+      animation?.start();
+    });
+
+    activeAnimations.forEach((animation) => animation.start());
 
     return () => {
-      animations.forEach(animation => animation.stop());
+      animations.forEach((animation) => animation?.stop());
+      floatAnimations.current = [];
     };
-  }, [floats, reducedMotion]);
+  }, [floats, reducedMotion, focused, preferencesLoaded, done]);
 
   // ========================================
   // RELEASE BUBBLE
   // ========================================
 
   const release = useCallback((index: number) => {
-    setDone(previous => {
+    setDone((previous) => {
       if (previous.includes(index)) {
         return previous;
       }
@@ -199,12 +217,12 @@ export default function Bubbles() {
       return [...previous, index];
     });
 
+    floatAnimations.current[index]?.stop();
+
     AudioEffects.bubblePop();
 
     if (hapticsEnabled.current) {
-      Haptics.impactAsync(
-        Haptics.ImpactFeedbackStyle.Light
-      ).catch(() => {});
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
   }, []);
 
@@ -219,15 +237,15 @@ export default function Bubbles() {
 
     const duration = Math.max(
       1,
-      Math.round((Date.now() - startedAt.current) / 1000)
+      Math.round((Date.now() - startedAt.current) / 1000),
     );
 
     AudioEffects.transition();
 
     router.replace({
-      pathname: '/complete',
+      pathname: "/complete",
       params: {
-        activity: 'Bubble Ocean',
+        activity: "Bubble Ocean",
         duration: String(duration),
       },
     });
@@ -239,7 +257,7 @@ export default function Bubbles() {
 
   return (
     <LinearGradient
-      colors={['#102F4B', '#164A63', '#1C6170']}
+      colors={["#102F4B", "#164A63", "#1C6170"]}
       style={styles.page}
     >
       <Pressable
@@ -250,17 +268,13 @@ export default function Bubbles() {
         <Text style={styles.back}>← EXIT</Text>
       </Pressable>
 
-      <Text style={styles.eyebrow}>
-        THE BUBBLE OCEAN
-      </Text>
+      <Text style={styles.eyebrow}>THE BUBBLE OCEAN</Text>
 
-      <Text style={styles.title}>
-        Let thoughts float away.
-      </Text>
+      <Text style={styles.title}>Let thoughts float away.</Text>
 
       <Text style={styles.sub}>
-        Tap a bubble when you are ready. There is no rush,
-        and you do not need to force a feeling away.
+        Tap a bubble when you are ready. There is no rush, and you do not need
+        to force a feeling away.
       </Text>
 
       <View style={styles.grid}>
@@ -287,15 +301,12 @@ export default function Bubbles() {
           onPress={finish}
           style={styles.button}
         >
-          <Text style={styles.buttonText}>
-            FINISH MY JOURNEY →
-          </Text>
+          <Text style={styles.buttonText}>FINISH MY JOURNEY →</Text>
         </Pressable>
       )}
 
       <Text style={styles.footnote}>
-        You can stop at any time. This is a reflection
-        activity, not a test.
+        You can stop at any time. This is a reflection activity, not a test.
       </Text>
     </LinearGradient>
   );
@@ -313,100 +324,100 @@ const styles = StyleSheet.create({
   },
 
   back: {
-    color: '#B9E9F4',
-    fontWeight: '700',
+    color: "#B9E9F4",
+    fontWeight: "700",
     fontSize: 12,
     marginBottom: 28,
   },
 
   eyebrow: {
-    color: '#B9E9F4',
+    color: "#B9E9F4",
     letterSpacing: 2,
-    fontWeight: '700',
+    fontWeight: "700",
     fontSize: 10,
   },
 
   title: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 28,
-    fontWeight: '800',
+    fontWeight: "800",
     marginTop: 10,
   },
 
   sub: {
-    color: '#C6E8F3',
+    color: "#C6E8F3",
     fontSize: 14,
     marginTop: 8,
     lineHeight: 22,
   },
 
   grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
     marginTop: 35,
   },
 
   bubbleContainer: {
-    width: '30%',
+    width: "30%",
   },
 
   bubble: {
-    width: '100%',
+    width: "100%",
     aspectRatio: 1,
     borderRadius: 100,
-    backgroundColor: '#5F9CB5',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#5F9CB5",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 18,
     borderWidth: 1,
-    borderColor: '#B9E9F4',
+    borderColor: "#B9E9F4",
   },
 
   popped: {
-    backgroundColor: '#28576B',
+    backgroundColor: "#28576B",
     opacity: 0.75,
   },
 
   bubbleIcon: {
     fontSize: 25,
-    color: '#FFFFFF',
+    color: "#FFFFFF",
   },
 
   word: {
     fontSize: 11,
-    color: '#FFFFFF',
-    fontWeight: '600',
+    color: "#FFFFFF",
+    fontWeight: "600",
     marginTop: 5,
-    textAlign: 'center',
+    textAlign: "center",
   },
 
   count: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 17,
-    fontWeight: '700',
-    textAlign: 'center',
+    fontWeight: "700",
+    textAlign: "center",
     marginTop: 15,
   },
 
   button: {
-    backgroundColor: '#A8C9FF',
+    backgroundColor: "#A8C9FF",
     padding: 17,
     borderRadius: 15,
     marginTop: 25,
-    alignItems: 'center',
+    alignItems: "center",
   },
 
   buttonText: {
-    color: '#10203A',
-    fontWeight: '800',
+    color: "#10203A",
+    fontWeight: "800",
   },
 
   footnote: {
-    color: '#A9D1DD',
+    color: "#A9D1DD",
     fontSize: 11,
     lineHeight: 17,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: 18,
   },
 });
