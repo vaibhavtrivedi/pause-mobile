@@ -1,100 +1,759 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Animated,
+  Easing,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
-const INHALE_MS=4000, EXHALE_MS=6000, SESSION_SECONDS=60;
-type Phase='inhale'|'exhale';
-export default function Breathing(){
-  const scale=useRef(new Animated.Value(0.82)).current;
-  const glow=useRef(new Animated.Value(0.35)).current;
-  const [phase,setPhase]=useState<Phase>('inhale');
-  const [elapsed,setElapsed]=useState(0);
-  const [running,setRunning]=useState(true);
-  const [haptics,setHaptics]=useState(false);
-  const [finished,setFinished]=useState(false);
-  const cycle=useRef<Animated.CompositeAnimation|null>(null);
-  const phaseTimer=useRef<ReturnType<typeof setInterval>|null>(null);
-  const elapsedRef=useRef(0);
-  const phaseRef=useRef<Phase>('inhale');
+import {
+  loadPreferences,
+  UserPreferences,
+  OrbTheme,
+  DEFAULT_PREFERENCES,
+} from '../lib/preferences';
 
-  const stopCycle=useCallback(()=>{cycle.current?.stop();cycle.current=null;},[]);
-  const startCycle=useCallback((initial:Phase='inhale')=>{
-    stopCycle();
-    const inhale=initial==='inhale';
-    if(inhale){scale.setValue(0.82);glow.setValue(0.28);}
-    else {scale.setValue(1.12);glow.setValue(0.8);}
-    const animation=Animated.loop(Animated.sequence([
-      Animated.parallel([
-        Animated.timing(scale,{toValue:1.12,duration:INHALE_MS,easing:Easing.inOut(Easing.ease),useNativeDriver:true}),
-        Animated.timing(glow,{toValue:0.8,duration:INHALE_MS,easing:Easing.inOut(Easing.ease),useNativeDriver:true})
-      ]),
-      Animated.parallel([
-        Animated.timing(scale,{toValue:0.82,duration:EXHALE_MS,easing:Easing.inOut(Easing.ease),useNativeDriver:true}),
-        Animated.timing(glow,{toValue:0.28,duration:EXHALE_MS,easing:Easing.inOut(Easing.ease),useNativeDriver:true})
-      ])
-    ]));
-    cycle.current=animation;animation.start();
-  },[glow,scale,stopCycle]);
+const INHALE_MS = 4000;
+const EXHALE_MS = 6000;
+const SESSION_SECONDS = 60;
 
-  useEffect(()=>{
-    if(!running||finished)return;
-    startCycle('inhale');
-    phaseRef.current='inhale';setPhase('inhale');
-    phaseTimer.current=setInterval(()=>{
-      const next=elapsedRef.current+1;
-      elapsedRef.current=next;setElapsed(next);
-      const nextPhase:Phase=(next%10)<4?'inhale':'exhale';
-      if(nextPhase!==phaseRef.current){
-        phaseRef.current=nextPhase;setPhase(nextPhase);
-        if(haptics) Haptics.selectionAsync().catch(()=>{});
+type Phase = 'inhale' | 'exhale';
+
+const THEMES: Record<
+  OrbTheme,
+  {
+    background: string[];
+    primary: string;
+    secondary: string;
+    core: string;
+    glow: string;
+    particle: string;
+    label: string;
+  }
+> = {
+  energy: {
+    background: ['#071326', '#102747', '#172D46'],
+    primary: '#416FAE',
+    secondary: '#83B9F5',
+    core: '#D9EDFF',
+    glow: '#77B9FF',
+    particle: '#C5E5FF',
+    label: 'LIVING ENERGY',
+  },
+
+  aurora: {
+    background: ['#091528', '#102E3E', '#172C4D'],
+    primary: '#387E86',
+    secondary: '#75C9B1',
+    core: '#D0FFE9',
+    glow: '#5CE2C1',
+    particle: '#B5FFE8',
+    label: 'AURORA',
+  },
+
+  ripple: {
+    background: ['#07192B', '#103B55', '#142F4A'],
+    primary: '#327DAB',
+    secondary: '#7ACCEB',
+    core: '#D8F6FF',
+    glow: '#72D7FF',
+    particle: '#B8F0FF',
+    label: 'WATER RIPPLE',
+  },
+
+  solar: {
+    background: ['#171329', '#392849', '#493044'],
+    primary: '#A66A3C',
+    secondary: '#F0B66B',
+    core: '#FFF0C7',
+    glow: '#FFC36F',
+    particle: '#FFE2A8',
+    label: 'SOLAR GLOW',
+  },
+};
+
+const PARTICLES = [
+  { x: -105, y: -75, size: 5 },
+  { x: 100, y: -100, size: 4 },
+  { x: -125, y: 35, size: 3 },
+  { x: 115, y: 45, size: 5 },
+  { x: -70, y: 105, size: 4 },
+  { x: 75, y: 115, size: 3 },
+  { x: 0, y: -125, size: 4 },
+  { x: 130, y: -30, size: 3 },
+];
+
+export default function Breathing() {
+  const [preferences, setPreferences] =
+    useState<UserPreferences>(DEFAULT_PREFERENCES);
+
+  const [loaded, setLoaded] = useState(false);
+  const [phase, setPhase] = useState<Phase>('inhale');
+  const [elapsed, setElapsed] = useState(0);
+  const [running, setRunning] = useState(true);
+  const [finished, setFinished] = useState(false);
+
+  const scale = useRef(new Animated.Value(0.82)).current;
+  const glow = useRef(new Animated.Value(0.3)).current;
+  const particleMotion = useRef(new Animated.Value(0)).current;
+
+  const cycle = useRef<Animated.CompositeAnimation | null>(null);
+  const lastPhase = useRef<Phase>('inhale');
+
+  const theme =
+    THEMES[preferences.orbTheme] || THEMES.energy;
+
+  useEffect(() => {
+    let active = true;
+
+    loadPreferences().then((saved) => {
+      if (active) {
+        setPreferences(saved);
+        setLoaded(true);
       }
-      if(next>=SESSION_SECONDS){
-        setRunning(false);setFinished(true);stopCycle();
-        if(phaseTimer.current)clearInterval(phaseTimer.current);
-      }
-    },1000);
-    return ()=>{if(phaseTimer.current)clearInterval(phaseTimer.current);stopCycle();};
-  },[running,finished,haptics,startCycle,stopCycle]);
+    });
 
-  const togglePause=()=>{
-    if(running){setRunning(false);stopCycle();if(phaseTimer.current)clearInterval(phaseTimer.current);}
-    else {setRunning(true);}
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const stopAnimation = useCallback(() => {
+    cycle.current?.stop();
+    cycle.current = null;
+  }, []);
+
+  const startOrbAnimation = useCallback(() => {
+    stopAnimation();
+
+    const position = elapsed % 10;
+
+    const inhale = position < 4;
+    const progress = inhale
+      ? position / 4
+      : (position - 4) / 6;
+
+    const fromScale = inhale
+      ? 0.82 + progress * 0.30
+      : 1.12 - progress * 0.30;
+
+    const toScale = inhale ? 1.12 : 0.82;
+
+    const fromGlow = inhale
+      ? 0.25 + progress * 0.65
+      : 0.90 - progress * 0.65;
+
+    const toGlow = inhale ? 0.90 : 0.25;
+
+    const duration = Math.max(
+      250,
+      (inhale ? 4 - position : 10 - position) * 1000
+    );
+
+    scale.setValue(fromScale);
+    glow.setValue(fromGlow);
+
+    const animation = Animated.parallel([
+      Animated.timing(scale, {
+        toValue: toScale,
+        duration: preferences.reducedMotion
+          ? Math.min(duration, 1200)
+          : duration,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      }),
+
+      Animated.timing(glow, {
+        toValue: toGlow,
+        duration: preferences.reducedMotion
+          ? Math.min(duration, 1200)
+          : duration,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      }),
+    ]);
+
+    cycle.current = animation;
+    animation.start();
+  }, [
+    elapsed,
+    glow,
+    preferences.reducedMotion,
+    scale,
+    stopAnimation,
+  ]);
+
+  useEffect(() => {
+    if (!loaded || !running || finished) {
+      stopAnimation();
+      return;
+    }
+
+    startOrbAnimation();
+
+    return () => stopAnimation();
+  }, [
+    loaded,
+    running,
+    finished,
+    startOrbAnimation,
+    stopAnimation,
+  ]);
+
+  useEffect(() => {
+    if (!loaded || !running || finished) return;
+
+    const timer = setInterval(() => {
+      setElapsed((previous) => {
+        const next = previous + 1;
+
+        if (next >= SESSION_SECONDS) {
+          setFinished(true);
+          setRunning(false);
+          return SESSION_SECONDS;
+        }
+
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [loaded, running, finished]);
+
+  const currentPhase: Phase =
+    elapsed % 10 < 4 ? 'inhale' : 'exhale';
+
+  useEffect(() => {
+    setPhase(currentPhase);
+
+    if (
+      loaded &&
+      running &&
+      currentPhase !== lastPhase.current &&
+      preferences.hapticsEnabled
+    ) {
+      Haptics.selectionAsync().catch(() => {});
+    }
+
+    lastPhase.current = currentPhase;
+  }, [
+    currentPhase,
+    loaded,
+    running,
+    preferences.hapticsEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!preferences.reducedMotion && loaded) {
+      const animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(particleMotion, {
+            toValue: 1,
+            duration: 3500,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(particleMotion, {
+            toValue: 0,
+            duration: 3500,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+
+      animation.start();
+
+      return () => animation.stop();
+    }
+
+    particleMotion.setValue(0);
+  }, [loaded, preferences.reducedMotion, particleMotion]);
+
+  const togglePause = () => {
+    if (running) {
+      setRunning(false);
+      stopAnimation();
+    } else {
+      setRunning(true);
+    }
   };
-  const reset=()=>{stopCycle();if(phaseTimer.current)clearInterval(phaseTimer.current);elapsedRef.current=0;setElapsed(0);setPhase('inhale');phaseRef.current='inhale';setFinished(false);setRunning(true);};
-  const leave=()=>{stopCycle();if(phaseTimer.current)clearInterval(phaseTimer.current);router.replace('/choose');};
-  const remaining=Math.max(0,SESSION_SECONDS-elapsed);
-  const progress=elapsed/SESSION_SECONDS;
 
-  if(finished)return <LinearGradient colors={['#091326','#142C4C','#172D46']} style={s.page}><View style={s.center}><Text style={s.spark}>✦</Text><Text style={s.title}>You made space for calm.</Text><Text style={s.subtitle}>You completed a minute of gentle breathing. Notice how you feel—there's no right answer.</Text><Pressable style={s.primary} onPress={()=>router.replace({pathname:'/complete',params:{activity:'Breathing Orb',duration:'60'}})}><Text style={s.primaryText}>CONTINUE  →</Text></Pressable><Pressable onPress={reset} style={s.secondary}><Text style={s.secondaryText}>Repeat breathing</Text></Pressable></View></LinearGradient>;
+  const reset = () => {
+    stopAnimation();
 
-  return <LinearGradient colors={['#081326','#102747','#173653']} style={s.page}>
-    <View style={s.header}><Pressable onPress={leave} accessibilityRole="button"><Text style={s.back}>‹  EXIT</Text></Pressable><Pressable onPress={()=>setHaptics(v=>!v)} accessibilityRole="switch" accessibilityState={{checked:haptics}}><Text style={s.haptic}>{haptics?'◉ HAPTICS ON':'○ HAPTICS OFF'}</Text></Pressable></View>
-    <View style={s.center}>
-      <Text style={s.eyebrow}>PAUSE · BREATHING ORB</Text>
-      <Text style={s.title}>Follow the light.</Text>
-      <Text style={s.subtitle}>Breathe gently, at a pace that feels comfortable for you.</Text>
-      <View style={s.orbStage}>
-        <Animated.View style={[s.halo,{opacity:glow,transform:[{scale}]}]}/>
-        <Animated.View style={[s.orbOuter,{transform:[{scale}]}]}>
-          <View style={s.orbMiddle}><View style={s.orbInner}><Text style={s.star}>✦</Text></View></View>
-        </Animated.View>
+    setElapsed(0);
+    setPhase('inhale');
+    lastPhase.current = 'inhale';
+    setFinished(false);
+    setRunning(true);
+  };
+
+  const leave = () => {
+    stopAnimation();
+    router.replace('/choose');
+  };
+
+  const remaining = Math.max(
+    0,
+    SESSION_SECONDS - elapsed
+  );
+
+  const progress = elapsed / SESSION_SECONDS;
+
+  if (!loaded) {
+    return (
+      <LinearGradient colors={theme.background} style={styles.page} />
+    );
+  }
+
+  if (finished) {
+    return (
+      <LinearGradient
+        colors={theme.background}
+        style={styles.page}
+      >
+        <View style={styles.center}>
+          <Text style={styles.completionStar}>✦</Text>
+
+          <Text style={styles.title}>
+            You made space for calm.
+          </Text>
+
+          <Text style={styles.subtitle}>
+            You completed a minute of gentle breathing.
+            Notice how you feel. There is no right answer.
+          </Text>
+
+          <Pressable
+            style={styles.primary}
+            onPress={() =>
+              router.replace({
+                pathname: '/complete',
+                params: {
+                  activity: 'Breathing Orb',
+                  duration: '60',
+                },
+              })
+            }
+          >
+            <Text style={styles.primaryText}>
+              CONTINUE →
+            </Text>
+          </Pressable>
+
+          <Pressable onPress={reset} style={styles.secondary}>
+            <Text style={styles.secondaryText}>
+              Repeat breathing
+            </Text>
+          </Pressable>
+        </View>
+      </LinearGradient>
+    );
+  }
+
+  return (
+    <LinearGradient
+      colors={theme.background}
+      style={styles.page}
+    >
+      <View style={styles.header}>
+        <Pressable onPress={leave}>
+          <Text style={styles.back}>‹ EXIT</Text>
+        </Pressable>
+
+        <Text style={styles.themeLabel}>
+          {theme.label}
+        </Text>
+
+        <Pressable
+          onPress={() =>
+            router.push('/preferences')
+          }
+        >
+          <Text style={styles.settings}>⚙</Text>
+        </Pressable>
       </View>
-      <Text accessibilityLiveRegion="polite" style={s.phase}>{running?(phase==='inhale'?'Breathe in gently':'Breathe out slowly'):'Take your time'}</Text>
-      <Text style={s.hint}>{running?(phase==='inhale'?'Let the light grow.':'Let the light soften.'):'Paused. Resume when you feel ready.'}</Text>
-      <View style={s.progressTrack}><View style={[s.progressFill,{width:`${progress*100}%`}]}/></View>
-      <View style={s.timeRow}><Text style={s.time}>{Math.floor(remaining/60)}:{String(remaining%60).padStart(2,'0')} remaining</Text><Text style={s.time}>1 minute</Text></View>
-      <Pressable style={s.primary} onPress={togglePause}><Text style={s.primaryText}>{running?'PAUSE SESSION':'RESUME SESSION'}</Text></Pressable>
-      <Pressable style={s.secondary} onPress={reset}><Text style={s.secondaryText}>Start again</Text></Pressable>
-      <Text style={s.footnote}>No breath-holding. If this rhythm feels uncomfortable, return to your natural breathing or stop.</Text>
-    </View>
-  </LinearGradient>;
+
+      <View style={styles.center}>
+        <Text style={styles.eyebrow}>
+          PAUSE · BREATHING EXPERIENCE
+        </Text>
+
+        <Text style={styles.title}>
+          Follow the light.
+        </Text>
+
+        <Text style={styles.subtitle}>
+          Breathe gently, at a pace that feels comfortable.
+        </Text>
+
+        <View style={styles.orbStage}>
+          {/* OUTER GLOW */}
+
+          {!preferences.reducedMotion && (
+            <Animated.View
+              style={[
+                styles.outerGlow,
+                {
+                  backgroundColor: theme.glow,
+                  opacity: glow.interpolate({
+                    inputRange: [0.25, 0.9],
+                    outputRange: [0.10, 0.30],
+                  }),
+                  transform: [{ scale }],
+                },
+              ]}
+            />
+          )}
+
+          {/* FLOATING PARTICLES */}
+
+          {PARTICLES.map((particle, index) => (
+            <Animated.View
+              key={index}
+              style={[
+                styles.particle,
+                {
+                  width: particle.size,
+                  height: particle.size,
+                  borderRadius: particle.size,
+                  backgroundColor: theme.particle,
+                  left: '50%',
+                  top: '50%',
+                  opacity: preferences.reducedMotion
+                    ? 0.5
+                    : particleMotion.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.25, 0.9],
+                      }),
+                  transform: [
+                    { translateX: particle.x },
+                    {
+                      translateY: preferences.reducedMotion
+                        ? particle.y
+                        : particleMotion.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [
+                              particle.y,
+                              particle.y - 15,
+                            ],
+                          }),
+                    },
+                  ],
+                },
+              ]}
+            />
+          ))}
+
+          {/* ORB LAYERS */}
+
+          <Animated.View
+            style={[
+              styles.orbOuter,
+              {
+                backgroundColor: theme.primary,
+                borderColor: theme.secondary,
+                transform: [{ scale }],
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.orbRing,
+                { borderColor: theme.secondary },
+              ]}
+            />
+
+            <View
+              style={[
+                styles.orbMiddle,
+                { backgroundColor: theme.secondary },
+              ]}
+            >
+              <View
+                style={[
+                  styles.orbInner,
+                  { backgroundColor: theme.core },
+                ]}
+              >
+                <Text style={styles.orbStar}>✦</Text>
+              </View>
+            </View>
+          </Animated.View>
+        </View>
+
+        <Text style={styles.phase}>
+          {!running
+            ? 'Take your time'
+            : phase === 'inhale'
+              ? 'Breathe in gently'
+              : 'Breathe out slowly'}
+        </Text>
+
+        <Text style={styles.hint}>
+          {!running
+            ? 'Paused. Resume when you feel ready.'
+            : phase === 'inhale'
+              ? 'Let the light grow.'
+              : 'Let the light soften.'}
+        </Text>
+
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${progress * 100}%` },
+            ]}
+          />
+        </View>
+
+        <View style={styles.timeRow}>
+          <Text style={styles.time}>
+            {Math.floor(remaining / 60)}:
+            {String(remaining % 60).padStart(2, '0')} remaining
+          </Text>
+
+          <Text style={styles.time}>1 minute</Text>
+        </View>
+
+        <Pressable
+          style={styles.primary}
+          onPress={togglePause}
+        >
+          <Text style={styles.primaryText}>
+            {running ? 'PAUSE SESSION' : 'RESUME SESSION'}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.secondary}
+          onPress={reset}
+        >
+          <Text style={styles.secondaryText}>
+            Start again
+          </Text>
+        </Pressable>
+
+        <Text style={styles.footnote}>
+          No breath-holding. If this rhythm feels
+          uncomfortable, return to your natural breathing
+          or stop.
+        </Text>
+      </View>
+    </LinearGradient>
+  );
 }
-const s=StyleSheet.create({
- page:{flex:1,paddingHorizontal:24,paddingTop:60,paddingBottom:24},header:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},back:{color:'#C4D8F4',fontSize:14,fontWeight:'700'},haptic:{color:'#B5CBE8',fontSize:10,fontWeight:'700',letterSpacing:1},
- center:{flex:1,alignItems:'center',justifyContent:'center'},eyebrow:{color:'#AFC8EC',fontSize:10,fontWeight:'800',letterSpacing:2},title:{color:'#F6F8FF',fontSize:30,fontWeight:'800',textAlign:'center',marginTop:12},subtitle:{color:'#B9C9E0',fontSize:14,lineHeight:22,textAlign:'center',marginTop:10,maxWidth:300},
- orbStage:{height:260,width:'100%',alignItems:'center',justifyContent:'center',marginVertical:10},halo:{position:'absolute',width:230,height:230,borderRadius:130,backgroundColor:'#6C9EDB'},orbOuter:{width:190,height:190,borderRadius:110,backgroundColor:'#294A78',alignItems:'center',justifyContent:'center',shadowColor:'#86B8FF',shadowOpacity:0.4,shadowRadius:32,elevation:12},orbMiddle:{width:145,height:145,borderRadius:90,backgroundColor:'#5484BB',alignItems:'center',justifyContent:'center'},orbInner:{width:92,height:92,borderRadius:60,backgroundColor:'#D0E6FF',alignItems:'center',justifyContent:'center'},star:{fontSize:34,color:'#31547D'},
- phase:{color:'#FFFFFF',fontSize:23,fontWeight:'700',marginTop:4},hint:{color:'#C2D2E9',fontSize:13,marginTop:8},progressTrack:{height:5,width:'100%',backgroundColor:'#314764',borderRadius:8,marginTop:30,overflow:'hidden'},progressFill:{height:5,backgroundColor:'#A8C9FF',borderRadius:8},timeRow:{width:'100%',flexDirection:'row',justifyContent:'space-between',marginTop:9},time:{color:'#AFC1DA',fontSize:11},
- primary:{backgroundColor:'#B7D3FF',paddingVertical:16,borderRadius:15,width:'100%',alignItems:'center',marginTop:27},primaryText:{color:'#10213B',fontWeight:'900',letterSpacing:1},secondary:{padding:13,marginTop:5},secondaryText:{color:'#C2D6F2',fontWeight:'600'},footnote:{color:'#92A8C8',fontSize:10,lineHeight:16,textAlign:'center',marginTop:8}
+
+const styles = StyleSheet.create({
+  page: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 55,
+    paddingBottom: 20,
+  },
+
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  back: {
+    color: '#C4D8F4',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  themeLabel: {
+    color: '#AFC8EC',
+    fontSize: 9,
+    letterSpacing: 2,
+    fontWeight: '800',
+  },
+
+  settings: {
+    color: '#C4D8F4',
+    fontSize: 22,
+  },
+
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  eyebrow: {
+    color: '#AFC8EC',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 2,
+  },
+
+  title: {
+    color: '#F6F8FF',
+    fontSize: 28,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: 12,
+  },
+
+  subtitle: {
+    color: '#B9C9E0',
+    fontSize: 13,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: 9,
+    maxWidth: 300,
+  },
+
+  orbStage: {
+    height: 300,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 5,
+  },
+
+  outerGlow: {
+    position: 'absolute',
+    width: 260,
+    height: 260,
+    borderRadius: 150,
+  },
+
+  particle: {
+    position: 'absolute',
+    marginLeft: -2,
+    marginTop: -2,
+    elevation: 8,
+  },
+
+  orbOuter: {
+    width: 205,
+    height: 205,
+    borderRadius: 120,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#8FC8FF',
+    shadowOpacity: 0.55,
+    shadowRadius: 35,
+    elevation: 18,
+  },
+
+  orbRing: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 100,
+    borderWidth: 1,
+    opacity: 0.6,
+  },
+
+  orbMiddle: {
+    width: 145,
+    height: 145,
+    borderRadius: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  orbInner: {
+    width: 95,
+    height: 95,
+    borderRadius: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  orbStar: {
+    fontSize: 38,
+    color: '#31547D',
+  },
+
+  phase: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 5,
+  },
+
+  hint: {
+    color: '#C2D2E9',
+    fontSize: 12,
+    marginTop: 7,
+  },
+
+  progressTrack: {
+    height: 5,
+    width: '100%',
+    backgroundColor: '#314764',
+    borderRadius: 8,
+    marginTop: 25,
+    overflow: 'hidden',
+  },
+
+  progressFill: {
+    height: 5,
+    backgroundColor: '#B7D3FF',
+    borderRadius: 8,
+  },
+
+  timeRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 9,
+  },
+
+  time: {
+    color: '#AFC1DA',
+    fontSize: 11,
+  },
+
+  primary: {
+    backgroundColor: '#B7D3FF',
+    paddingVertical: 16,
+    borderRadius: 15,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 25,
+  },
+
+  primaryText: {
+    color: '#10213B',
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  secondary: {
+    padding: 12,
+    marginTop: 4,
+  },
+
+  secondaryText: {
+    color: '#C2D6F2',
+    fontWeight: '600',
+  },
+
+  footnote: {
+    color: '#92A8C8',
+    fontSize: 10,
+    lineHeight: 16,
+    textAlign: 'center',
+    marginTop: 7,
+  },
+
+  completionStar: {
+    color: '#C5DFFF',
+    fontSize: 55,
+    marginBottom: 20,
+  },
 });
