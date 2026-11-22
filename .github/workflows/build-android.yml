@@ -47,8 +47,8 @@ jobs:
 
       - name: Check project configuration
         run: |
-          npx expo config --type public
-          npx expo-doctor  
+          node ./node_modules/expo/bin/cli config --type public
+          node ./node_modules/expo/bin/cli-doctor  
 
       - name: Verify Expo authentication
         run: eas whoami
