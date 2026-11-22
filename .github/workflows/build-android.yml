@@ -28,6 +28,7 @@ jobs:
 
       - name: Diagnose Expo packages
         run: |
+          npm ls @expo/config-plugins @expo/prebuild-config
           npm ls expo expo-router expo-linking expo-constants
           node -e "console.log(require.resolve('expo/package.json'))"
           node -e "console.log(require.resolve('expo-linking/package.json'))"
