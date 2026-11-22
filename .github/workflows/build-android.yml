@@ -1,0 +1,36 @@
+name: PAUSE Android APK Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build PAUSE APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Link Expo project
+        run: eas init --account vaibhavtrivedi80 --non-interactive
+
+      - name: Generate Android APK
+        run: eas build --platform android --profile preview --non-interactive --no-wait
