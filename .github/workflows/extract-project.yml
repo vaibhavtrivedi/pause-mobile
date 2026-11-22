@@ -1,0 +1,59 @@
+name: Extract PAUSE Project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project
+        run: |
+          python3 - <<'PY'
+          import zipfile, pathlib, shutil
+
+          root = pathlib.Path(".").resolve()
+          archives = list(root.glob("*.zip"))
+
+          if not archives:
+              raise Exception("PAUSE ZIP not found")
+
+          temp = root / "extracted"
+          temp.mkdir(exist_ok=True)
+
+          with zipfile.ZipFile(archives[0]) as z:
+              z.extractall(temp)
+
+          packages = list(temp.rglob("package.json"))
+
+          if not packages:
+              raise Exception("package.json not found")
+
+          project = packages[0].parent
+
+          for item in project.iterdir():
+              target = root / item.name
+              if target.exists():
+                  if target.is_dir():
+                      shutil.rmtree(target)
+                  else:
+                      target.unlink()
+              shutil.move(str(item), str(target))
+
+          archives[0].unlink()
+          shutil.rmtree(temp)
+          PY
+
+      - name: Save extracted files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Extract PAUSE mobile project" || echo "No changes"
+          git push
