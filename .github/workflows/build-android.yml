@@ -37,13 +37,13 @@ jobs:
           grep -n 'bundle-origin' node_modules/expo-linking/build/createURL.js || true
 
       - name: Validate Expo dependencies
-        run: npx expo install --check  
+        run: node ./node_modules/expo/bin/cli install --check  
 
       - name: Align Expo dependencies
-        run: npx expo install --fix
+        run: node ./node_modules/expo/bin/cli install --fix
 
       - name: Verify Expo dependencies
-        run: npx expo install --check
+        run: node ./node_modules/expo/bin/cli install --check
 
       - name: Check project configuration
         run: |
