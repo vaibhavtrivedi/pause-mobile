@@ -1,411 +1,297 @@
-import { useEffect, useRef, useState } from 'react';
+import { Audio } from 'expo-av';
 import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  Animated,
-  Easing,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import * as Haptics from 'expo-haptics';
-import { loadPreferences, UserPreferences } from '../lib/preferences';
+  SoundTheme,
+  UserPreferences,
+} from './preferences';
 
-const words = [
-  'Pressure',
-  'Frustration',
-  'Worry',
-  'Impatience',
-  'Expectations',
-  'Tension',
-];
+// ==========================================
+// AUDIO ASSETS
+// ==========================================
 
-export default function Bubbles() {
-  const [done, setDone] = useState<number[]>([]);
-  const [preferences, setPreferences] =
-    useState<UserPreferences | null>(null);
+const AMBIENT_TRACKS: Partial<Record<SoundTheme, number>> = {
+  ocean: require('../assets/audio/ambient/ocean.mp3'),
+  rain: require('../assets/audio/ambient/rain.mp3'),
+  forest: require('../assets/audio/ambient/forest.mp3'),
+  meditation: require('../assets/audio/ambient/meditation.mp3'),
+};
 
-  const startedAt = useRef(Date.now());
+const EFFECTS = {
+  bubblePop: require('../assets/audio/effects/bubble-pop.mp3'),
+  transition: require('../assets/audio/effects/transition.mp3'),
+  completion: require('../assets/audio/effects/completion.mp3'),
+};
 
-  const floats = useRef(
-    words.map(() => new Animated.Value(0))
-  ).current;
+// ==========================================
+// AUDIO STATE
+// ==========================================
 
-  const scales = useRef(
-    words.map(() => new Animated.Value(1))
-  ).current;
+let ambientSound: Audio.Sound | null = null;
+let effectSound: Audio.Sound | null = null;
 
-  const opacities = useRef(
-    words.map(() => new Animated.Value(1))
-  ).current;
+let currentTheme: SoundTheme = 'silent';
 
-  useEffect(() => {
-    loadPreferences().then(setPreferences);
-  }, []);
+let musicVolume = 0.6;
+let effectsVolume = 0.7;
 
-  useEffect(() => {
-    const loops = floats.map((value, index) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(index * 180),
-          Animated.timing(value, {
-            toValue: 1,
-            duration: 2000 + index * 180,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-          Animated.timing(value, {
-            toValue: 0,
-            duration: 2000 + index * 180,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-        ])
-      )
-    );
+let musicEnabled = false;
+let effectsEnabled = true;
 
-    loops.forEach(loop => loop.start());
+let audioInitialized = false;
 
-    return () => loops.forEach(loop => loop.stop());
-  }, [floats]);
+// ==========================================
+// INITIALIZATION
+// ==========================================
 
-  const release = async (index: number) => {
-    if (done.includes(index)) return;
+export async function initializeAudio(): Promise<void> {
+  if (audioInitialized) return;
 
-    if (preferences?.hapticsEnabled) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
-
-    setDone(previous => [...previous, index]);
-
-    Animated.parallel([
-      Animated.timing(scales[index], {
-        toValue: 1.35,
-        duration: 220,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacities[index], {
-        toValue: 0,
-        duration: 350,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
-  const finish = () => {
-    const duration = Math.max(
-      1,
-      Math.round((Date.now() - startedAt.current) / 1000)
-    );
-
-    router.replace({
-      pathname: '/complete',
-      params: {
-        activity: 'Bubble Ocean',
-        duration: String(duration),
-      },
+  try {
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
     });
-  };
 
-  return (
-    <LinearGradient
-      colors={['#071C35', '#103C59', '#14566A', '#102F4B']}
-      style={styles.page}
-    >
-      <View style={styles.backgroundGlow} />
-      <View style={styles.backgroundGlowTwo} />
-
-      <Pressable onPress={() => router.back()}>
-        <Text style={styles.back}>← EXIT</Text>
-      </Pressable>
-
-      <Text style={styles.eyebrow}>THE BUBBLE OCEAN</Text>
-
-      <Text style={styles.title}>
-        Let it float away.
-      </Text>
-
-      <Text style={styles.subtitle}>
-        Some thoughts don't need an answer right now.
-        {'\n'}
-        Release them, one bubble at a time.
-      </Text>
-
-      <View style={styles.instruction}>
-        <Text style={styles.instructionText}>
-          ✦  Tap a bubble when you feel ready
-        </Text>
-      </View>
-
-      <View style={styles.grid}>
-        {words.map((word, index) => {
-          const translateY = floats[index].interpolate({
-            inputRange: [0, 1],
-            outputRange: [0, -14 - (index % 3) * 5],
-          });
-
-          const released = done.includes(index);
-
-          return (
-            <Animated.View
-              key={word}
-              style={[
-                styles.bubbleWrapper,
-                {
-                  opacity: opacities[index],
-                  transform: [
-                    { translateY },
-                    { scale: scales[index] },
-                  ],
-                },
-              ]}
-            >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Release ${word}`}
-                disabled={released}
-                onPress={() => release(index)}
-                style={[
-                  styles.bubble,
-                  index % 2 === 0
-                    ? styles.bubbleLarge
-                    : styles.bubbleSmall,
-                ]}
-              >
-                <View style={styles.bubbleHighlight} />
-
-                <Text style={styles.bubbleIcon}>✧</Text>
-                <Text style={styles.word}>{word}</Text>
-              </Pressable>
-            </Animated.View>
-          );
-        })}
-      </View>
-
-      <View style={styles.progressArea}>
-        <Text style={styles.progress}>
-          {done.length} of {words.length} released
-        </Text>
-
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${(done.length / words.length) * 100}%` },
-            ]}
-          />
-        </View>
-      </View>
-
-      {done.length === words.length ? (
-        <Pressable style={styles.finishButton} onPress={finish}>
-          <Text style={styles.finishText}>
-            COMPLETE MY JOURNEY →
-          </Text>
-        </Pressable>
-      ) : (
-        <Text style={styles.footer}>
-          There is no rush. Take your time.
-        </Text>
-      )}
-
-      <Text style={styles.disclaimer}>
-        You don't have to force any feeling away.
-      </Text>
-    </LinearGradient>
-  );
+    audioInitialized = true;
+  } catch (error) {
+    console.warn('Audio initialization failed:', error);
+  }
 }
 
-const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    paddingHorizontal: 25,
-    paddingTop: 62,
-    overflow: 'hidden',
-  },
+// ==========================================
+// PREFERENCES
+// ==========================================
 
-  backgroundGlow: {
-    position: 'absolute',
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: '#1C7890',
-    opacity: 0.12,
-    top: 180,
-    right: -120,
-  },
+export function configureAudio(
+  preferences: UserPreferences
+): void {
+  musicEnabled = preferences.musicEnabled;
+  effectsEnabled = preferences.effectsEnabled;
 
-  backgroundGlowTwo: {
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: '#668DCE',
-    opacity: 0.10,
-    bottom: 80,
-    left: -110,
-  },
+  musicVolume = Math.max(
+    0,
+    Math.min(1, preferences.musicVolume / 100)
+  );
 
-  back: {
-    color: '#B9E9F4',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 30,
-  },
+  effectsVolume = Math.max(
+    0,
+    Math.min(1, preferences.effectsVolume / 100)
+  );
 
-  eyebrow: {
-    color: '#8DD9E8',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 3,
-  },
+  currentTheme = preferences.soundTheme;
+}
 
-  title: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: '800',
-    marginTop: 12,
-  },
+// ==========================================
+// AMBIENT MUSIC
+// ==========================================
 
-  subtitle: {
-    color: '#C2DDE9',
-    fontSize: 14,
-    lineHeight: 23,
-    marginTop: 10,
-  },
+export async function playAmbient(
+  theme: SoundTheme = currentTheme
+): Promise<void> {
+  await initializeAudio();
 
-  instruction: {
-    marginTop: 22,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF12',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
+  if (!musicEnabled || theme === 'silent') {
+    await stopAmbient();
+    return;
+  }
 
-  instructionText: {
-    color: '#BCEAF2',
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  const source = AMBIENT_TRACKS[theme];
 
-  grid: {
-    flex: 1,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-around',
-    alignContent: 'center',
-    marginTop: 10,
-  },
+  if (!source) return;
 
-  bubbleWrapper: {
-    width: '32%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 8,
-  },
+  // Reuse existing track when possible
+  if (ambientSound && currentTheme === theme) {
+    try {
+      const status = await ambientSound.getStatusAsync();
 
-  bubble: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: 100,
-    borderWidth: 1,
-    borderColor: '#B9F4FF90',
-    backgroundColor: '#75C5DF35',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    shadowColor: '#75DFFF',
-    shadowOpacity: 0.35,
-    shadowRadius: 15,
-    elevation: 8,
-  },
+      if (status.isLoaded) {
+        await ambientSound.setVolumeAsync(musicVolume);
 
-  bubbleLarge: {
-    backgroundColor: '#65B9D940',
-  },
+        if (!status.isPlaying) {
+          await ambientSound.playAsync();
+        }
 
-  bubbleSmall: {
-    backgroundColor: '#9BCBEA30',
-  },
+        return;
+      }
+    } catch {
+      await stopAmbient();
+    }
+  }
 
-  bubbleHighlight: {
-    position: 'absolute',
-    width: '38%',
-    height: '20%',
-    borderRadius: 50,
-    backgroundColor: '#FFFFFF35',
-    top: '17%',
-    left: '17%',
-    transform: [{ rotate: '-35deg' }],
-  },
+  await stopAmbient();
 
-  bubbleIcon: {
-    color: '#FFFFFF',
-    fontSize: 25,
-  },
+  try {
+    const { sound } = await Audio.Sound.createAsync(
+      source,
+      {
+        shouldPlay: true,
+        isLooping: true,
+        volume: musicVolume,
+      }
+    );
 
-  word: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: 5,
-    textAlign: 'center',
-  },
+    ambientSound = sound;
+    currentTheme = theme;
 
-  progressArea: {
-    marginBottom: 18,
-  },
+  } catch (error) {
+    console.warn('Ambient playback failed:', error);
+  }
+}
 
-  progress: {
-    color: '#D8F2F8',
-    fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
+export async function pauseAmbient(): Promise<void> {
+  if (!ambientSound) return;
 
-  progressTrack: {
-    height: 5,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF25',
-    overflow: 'hidden',
-  },
+  try {
+    const status = await ambientSound.getStatusAsync();
 
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#8DE3E8',
-    borderRadius: 10,
-  },
+    if (status.isLoaded && status.isPlaying) {
+      await ambientSound.pauseAsync();
+    }
+  } catch (error) {
+    console.warn('Could not pause ambient audio:', error);
+  }
+}
 
-  finishButton: {
-    backgroundColor: '#B5DDF5',
-    borderRadius: 16,
-    padding: 18,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+export async function resumeAmbient(): Promise<void> {
+  if (!ambientSound || !musicEnabled) return;
 
-  finishText: {
-    color: '#102F4B',
-    fontWeight: '900',
-    fontSize: 12,
-    letterSpacing: 1,
-  },
+  try {
+    const status = await ambientSound.getStatusAsync();
 
-  footer: {
-    color: '#C2E5EE',
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 15,
-  },
+    if (status.isLoaded && !status.isPlaying) {
+      await ambientSound.playAsync();
+    }
+  } catch (error) {
+    console.warn('Could not resume ambient audio:', error);
+  }
+}
 
-  disclaimer: {
-    color: '#91B9C8',
-    fontSize: 10,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-});
+export async function stopAmbient(): Promise<void> {
+  if (!ambientSound) return;
+
+  const sound = ambientSound;
+  ambientSound = null;
+
+  try {
+    await sound.stopAsync();
+    await sound.unloadAsync();
+  } catch {
+    // Sound may already be unloaded.
+  }
+}
+
+// ==========================================
+// SOUND EFFECTS
+// ==========================================
+
+export async function playEffect(
+  effect: keyof typeof EFFECTS
+): Promise<void> {
+  if (!effectsEnabled) return;
+
+  await initializeAudio();
+
+  try {
+    if (effectSound) {
+      await effectSound.unloadAsync();
+      effectSound = null;
+    }
+
+    const { sound } = await Audio.Sound.createAsync(
+      EFFECTS[effect],
+      {
+        shouldPlay: true,
+        volume: effectsVolume,
+      }
+    );
+
+    effectSound = sound;
+
+    sound.setOnPlaybackStatusUpdate(status => {
+      if (status.isLoaded && status.didJustFinish) {
+        sound.unloadAsync().catch(() => {});
+
+        if (effectSound === sound) {
+          effectSound = null;
+        }
+      }
+    });
+
+  } catch (error) {
+    console.warn('Sound effect playback failed:', error);
+  }
+}
+
+// ==========================================
+// VOLUME CONTROLS
+// ==========================================
+
+export async function updateMusicVolume(
+  volume: number
+): Promise<void> {
+  musicVolume = Math.max(0, Math.min(1, volume));
+
+  if (!ambientSound) return;
+
+  try {
+    await ambientSound.setVolumeAsync(musicVolume);
+  } catch (error) {
+    console.warn('Music volume update failed:', error);
+  }
+}
+
+export async function updateEffectsVolume(
+  volume: number
+): Promise<void> {
+  effectsVolume = Math.max(0, Math.min(1, volume));
+}
+
+// ==========================================
+// APPLY USER PREFERENCES
+// ==========================================
+
+export async function applyAudioPreferences(
+  preferences: UserPreferences
+): Promise<void> {
+  configureAudio(preferences);
+
+  if (
+    !preferences.musicEnabled ||
+    preferences.soundTheme === 'silent'
+  ) {
+    await stopAmbient();
+    return;
+  }
+
+  await playAmbient(preferences.soundTheme);
+}
+
+// ==========================================
+// CLEANUP
+// ==========================================
+
+export async function cleanupAudio(): Promise<void> {
+  await stopAmbient();
+
+  if (effectSound) {
+    const sound = effectSound;
+    effectSound = null;
+
+    try {
+      await sound.unloadAsync();
+    } catch {
+      // Already unloaded.
+    }
+  }
+}
+
+// ==========================================
+// EASY-TO-USE EFFECT SHORTCUTS
+// ==========================================
+
+export const AudioEffects = {
+  bubblePop: () => playEffect('bubblePop'),
+  transition: () => playEffect('transition'),
+  completion: () => playEffect('completion'),
+};

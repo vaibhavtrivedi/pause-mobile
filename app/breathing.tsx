@@ -19,8 +19,14 @@ import {
   DEFAULT_PREFERENCES,
 } from '../lib/preferences';
 
-const INHALE_MS = 4000;
-const EXHALE_MS = 6000;
+import {
+  applyAudioPreferences,
+  pauseAmbient,
+  resumeAmbient,
+  cleanupAudio,
+  AudioEffects,
+} from '../lib/audio';
+
 const SESSION_SECONDS = 60;
 
 type Phase = 'inhale' | 'exhale';
@@ -105,24 +111,40 @@ export default function Breathing() {
 
   const cycle = useRef<Animated.CompositeAnimation | null>(null);
   const lastPhase = useRef<Phase>('inhale');
+  const completionPlayed = useRef(false);
 
   const theme =
     THEMES[preferences.orbTheme] || THEMES.energy;
 
+  // ========================================
+  // LOAD PREFERENCES AND AUDIO
+  // ========================================
+
   useEffect(() => {
     let active = true;
 
-    loadPreferences().then((saved) => {
-      if (active) {
-        setPreferences(saved);
-        setLoaded(true);
-      }
-    });
+    async function setup() {
+      const saved = await loadPreferences();
+
+      if (!active) return;
+
+      setPreferences(saved);
+      await applyAudioPreferences(saved);
+
+      if (active) setLoaded(true);
+    }
+
+    setup();
 
     return () => {
       active = false;
+      cleanupAudio();
     };
   }, []);
+
+  // ========================================
+  // ORB ANIMATION
+  // ========================================
 
   const stopAnimation = useCallback(() => {
     cycle.current?.stop();
@@ -135,6 +157,7 @@ export default function Breathing() {
     const position = elapsed % 10;
 
     const inhale = position < 4;
+
     const progress = inhale
       ? position / 4
       : (position - 4) / 6;
@@ -180,11 +203,17 @@ export default function Breathing() {
     ]);
 
     cycle.current = animation;
-    animation.start();
+    animation.start(({ finished: completed }) => {
+      if (completed && running && !finished) {
+        startOrbAnimation();
+      }
+    });
   }, [
     elapsed,
+    finished,
     glow,
     preferences.reducedMotion,
+    running,
     scale,
     stopAnimation,
   ]);
@@ -197,7 +226,7 @@ export default function Breathing() {
 
     startOrbAnimation();
 
-    return () => stopAnimation();
+    return stopAnimation;
   }, [
     loaded,
     running,
@@ -206,11 +235,15 @@ export default function Breathing() {
     stopAnimation,
   ]);
 
+  // ========================================
+  // SESSION TIMER
+  // ========================================
+
   useEffect(() => {
     if (!loaded || !running || finished) return;
 
     const timer = setInterval(() => {
-      setElapsed((previous) => {
+      setElapsed(previous => {
         const next = previous + 1;
 
         if (next >= SESSION_SECONDS) {
@@ -225,6 +258,10 @@ export default function Breathing() {
 
     return () => clearInterval(timer);
   }, [loaded, running, finished]);
+
+  // ========================================
+  // BREATHING PHASE
+  // ========================================
 
   const currentPhase: Phase =
     elapsed % 10 < 4 ? 'inhale' : 'exhale';
@@ -249,56 +286,93 @@ export default function Breathing() {
     preferences.hapticsEnabled,
   ]);
 
+  // ========================================
+  // PARTICLE ANIMATION
+  // ========================================
+
   useEffect(() => {
-    if (!preferences.reducedMotion && loaded) {
-      const animation = Animated.loop(
-        Animated.sequence([
-          Animated.timing(particleMotion, {
-            toValue: 1,
-            duration: 3500,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(particleMotion, {
-            toValue: 0,
-            duration: 3500,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-
-      animation.start();
-
-      return () => animation.stop();
+    if (
+      !loaded ||
+      !running ||
+      preferences.reducedMotion
+    ) {
+      particleMotion.stopAnimation();
+      particleMotion.setValue(0);
+      return;
     }
 
-    particleMotion.setValue(0);
-  }, [loaded, preferences.reducedMotion, particleMotion]);
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(particleMotion, {
+          toValue: 1,
+          duration: 3500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(particleMotion, {
+          toValue: 0,
+          duration: 3500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
 
-  const togglePause = () => {
+    animation.start();
+
+    return () => animation.stop();
+  }, [
+    loaded,
+    running,
+    preferences.reducedMotion,
+    particleMotion,
+  ]);
+
+  // ========================================
+  // SESSION CONTROLS
+  // ========================================
+
+  const togglePause = async () => {
     if (running) {
       setRunning(false);
       stopAnimation();
+      await pauseAmbient();
     } else {
       setRunning(true);
+      await resumeAmbient();
     }
   };
 
-  const reset = () => {
+  const reset = async () => {
     stopAnimation();
 
     setElapsed(0);
     setPhase('inhale');
     lastPhase.current = 'inhale';
+    completionPlayed.current = false;
     setFinished(false);
     setRunning(true);
+
+    await resumeAmbient();
   };
 
-  const leave = () => {
+  const leave = async () => {
     stopAnimation();
+    await cleanupAudio();
     router.replace('/choose');
   };
+
+  // ========================================
+  // COMPLETION
+  // ========================================
+
+  useEffect(() => {
+    if (finished && !completionPlayed.current) {
+      completionPlayed.current = true;
+      AudioEffects.completion();
+      cleanupAudio();
+    }
+  }, [finished]);
 
   const remaining = Math.max(
     0,
@@ -307,11 +381,22 @@ export default function Breathing() {
 
   const progress = elapsed / SESSION_SECONDS;
 
+  // ========================================
+  // LOADING
+  // ========================================
+
   if (!loaded) {
     return (
-      <LinearGradient colors={theme.background} style={styles.page} />
+      <LinearGradient
+        colors={theme.background}
+        style={styles.page}
+      />
     );
   }
+
+  // ========================================
+  // COMPLETION SCREEN
+  // ========================================
 
   if (finished) {
     return (
@@ -348,7 +433,10 @@ export default function Breathing() {
             </Text>
           </Pressable>
 
-          <Pressable onPress={reset} style={styles.secondary}>
+          <Pressable
+            onPress={reset}
+            style={styles.secondary}
+          >
             <Text style={styles.secondaryText}>
               Repeat breathing
             </Text>
@@ -357,6 +445,10 @@ export default function Breathing() {
       </LinearGradient>
     );
   }
+
+  // ========================================
+  // MAIN EXPERIENCE
+  // ========================================
 
   return (
     <LinearGradient
@@ -373,9 +465,7 @@ export default function Breathing() {
         </Text>
 
         <Pressable
-          onPress={() =>
-            router.push('/preferences')
-          }
+          onPress={() => router.push('/preferences')}
         >
           <Text style={styles.settings}>⚙</Text>
         </Pressable>
@@ -395,8 +485,6 @@ export default function Breathing() {
         </Text>
 
         <View style={styles.orbStage}>
-          {/* OUTER GLOW */}
-
           {!preferences.reducedMotion && (
             <Animated.View
               style={[
@@ -412,8 +500,6 @@ export default function Breathing() {
               ]}
             />
           )}
-
-          {/* FLOATING PARTICLES */}
 
           {PARTICLES.map((particle, index) => (
             <Animated.View
@@ -451,8 +537,6 @@ export default function Breathing() {
               ]}
             />
           ))}
-
-          {/* ORB LAYERS */}
 
           <Animated.View
             style={[

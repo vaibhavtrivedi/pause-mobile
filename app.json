@@ -6,6 +6,7 @@
     "version": "0.3.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "icon": "./assets/images/pause_icon.png",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.independent.pause"
