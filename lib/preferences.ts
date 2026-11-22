@@ -16,10 +16,10 @@ export type UserPreferences = {
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   orbTheme: 'energy',
-  soundTheme: 'silent',
-  musicEnabled: false,
+  soundTheme: 'meditation',
+  musicEnabled: true,
   effectsEnabled: true,
-  musicVolume: 60,
+  musicVolume: 40,
   effectsVolume: 70,
   hapticsEnabled: false,
   reducedMotion: false,

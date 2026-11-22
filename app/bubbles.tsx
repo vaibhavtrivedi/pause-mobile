@@ -2,7 +2,7 @@ import { Audio } from 'expo-av';
 import {
   SoundTheme,
   UserPreferences,
-} from './preferences';
+} from '../lib/preferences';
 
 // ==========================================
 // AUDIO ASSETS

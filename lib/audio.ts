@@ -4,6 +4,10 @@ import {
   UserPreferences,
 } from './preferences';
 
+// ==========================================
+// AUDIO ASSETS
+// ==========================================
+
 const AMBIENT_TRACKS: Partial<Record<SoundTheme, number>> = {
   ocean: require('../assets/audio/ambient/ocean.mp3'),
   rain: require('../assets/audio/ambient/rain.mp3'),
@@ -17,17 +21,30 @@ const EFFECTS = {
   completion: require('../assets/audio/effects/completion.wav'),
 };
 
+// ==========================================
+// AUDIO STATE
+// ==========================================
+
 let ambientSound: Audio.Sound | null = null;
-let effectSound: Audio.Sound | null = null;
+
+const activeEffects = new Set<Audio.Sound>();
 
 let currentTheme: SoundTheme = 'silent';
+
 let musicVolume = 0.6;
 let effectsVolume = 0.7;
+
 let musicEnabled = false;
 let effectsEnabled = true;
-let audioInitialized = false;
 
-async function initializeAudio() {
+let audioInitialized = false;
+let ambientRequestId = 0;
+
+// ==========================================
+// INITIALIZATION
+// ==========================================
+
+export async function initializeAudio(): Promise<void> {
   if (audioInitialized) return;
 
   try {
@@ -44,16 +61,58 @@ async function initializeAudio() {
   }
 }
 
-export function configureAudio(preferences: UserPreferences) {
+// ==========================================
+// PREFERENCES
+// ==========================================
+
+export function configureAudio(
+  preferences: UserPreferences
+): void {
   musicEnabled = preferences.musicEnabled;
   effectsEnabled = preferences.effectsEnabled;
-  musicVolume = preferences.musicVolume / 100;
-  effectsVolume = preferences.effectsVolume / 100;
+
+  musicVolume = Math.max(
+    0,
+    Math.min(1, preferences.musicVolume / 100)
+  );
+
+  effectsVolume = Math.max(
+    0,
+    Math.min(1, preferences.effectsVolume / 100)
+  );
+
+  // Do not update currentTheme here.
+  // It must represent the track actually loaded.
 }
+
+// ==========================================
+// INTERNAL CLEANUP
+// ==========================================
+
+async function unloadAmbient(): Promise<void> {
+  const sound = ambientSound;
+
+  ambientSound = null;
+  currentTheme = 'silent';
+
+  if (!sound) return;
+
+  try {
+    await sound.stopAsync();
+  } catch {}
+
+  try {
+    await sound.unloadAsync();
+  } catch {}
+}
+
+// ==========================================
+// AMBIENT MUSIC
+// ==========================================
 
 export async function playAmbient(
   theme: SoundTheme = currentTheme
-) {
+): Promise<void> {
   await initializeAudio();
 
   if (!musicEnabled || theme === 'silent') {
@@ -63,8 +122,14 @@ export async function playAmbient(
 
   const source = AMBIENT_TRACKS[theme];
 
-  if (!source) return;
+  if (!source) {
+    console.warn('Ambient track not found:', theme);
+    return;
+  }
 
+  const requestId = ++ambientRequestId;
+
+  // Reuse only when the actual loaded track matches.
   if (ambientSound && currentTheme === theme) {
     try {
       const status = await ambientSound.getStatusAsync();
@@ -79,27 +144,38 @@ export async function playAmbient(
         return;
       }
     } catch {
-      await stopAmbient();
+      await unloadAmbient();
     }
   }
 
-  await stopAmbient();
+  await unloadAmbient();
 
   try {
-    const { sound } = await Audio.Sound.createAsync(source, {
-      shouldPlay: true,
-      isLooping: true,
-      volume: musicVolume,
-    });
+    const { sound } = await Audio.Sound.createAsync(
+      source,
+      {
+        shouldPlay: true,
+        isLooping: true,
+        volume: musicVolume,
+      }
+    );
+
+    // Ignore an outdated request if the user changed settings
+    // while the previous track was loading.
+    if (requestId !== ambientRequestId) {
+      await sound.unloadAsync();
+      return;
+    }
 
     ambientSound = sound;
     currentTheme = theme;
+
   } catch (error) {
     console.warn('Ambient playback failed:', error);
   }
 }
 
-export async function pauseAmbient() {
+export async function pauseAmbient(): Promise<void> {
   if (!ambientSound) return;
 
   try {
@@ -113,8 +189,15 @@ export async function pauseAmbient() {
   }
 }
 
-export async function resumeAmbient() {
-  if (!ambientSound || !musicEnabled) return;
+export async function resumeAmbient(): Promise<void> {
+  if (!musicEnabled) return;
+
+  if (!ambientSound) {
+    if (currentTheme !== 'silent') {
+      await playAmbient(currentTheme);
+    }
+    return;
+  }
 
   try {
     const status = await ambientSound.getStatusAsync();
@@ -127,34 +210,28 @@ export async function resumeAmbient() {
   }
 }
 
-export async function stopAmbient() {
-  if (!ambientSound) return;
+export async function stopAmbient(): Promise<void> {
+  // Invalidate any track currently being loaded.
+  ambientRequestId++;
 
-  const sound = ambientSound;
-  ambientSound = null;
-
-  try {
-    await sound.stopAsync();
-    await sound.unloadAsync();
-  } catch {
-    // Sound may already be unloaded.
-  }
+  await unloadAmbient();
 }
+
+// ==========================================
+// SOUND EFFECTS
+// ==========================================
 
 export async function playEffect(
   effect: keyof typeof EFFECTS
-) {
+): Promise<void> {
   if (!effectsEnabled) return;
 
   await initializeAudio();
 
-  try {
-    if (effectSound) {
-      await effectSound.unloadAsync();
-      effectSound = null;
-    }
+  let sound: Audio.Sound | null = null;
 
-    const { sound } = await Audio.Sound.createAsync(
+  try {
+    const result = await Audio.Sound.createAsync(
       EFFECTS[effect],
       {
         shouldPlay: true,
@@ -162,45 +239,65 @@ export async function playEffect(
       }
     );
 
-    effectSound = sound;
+    sound = result.sound;
+    activeEffects.add(sound);
 
     sound.setOnPlaybackStatusUpdate(status => {
-      if (status.isLoaded && status.didJustFinish) {
+      if (status.isLoaded && status.didJustFinish && sound) {
+        activeEffects.delete(sound);
         sound.unloadAsync().catch(() => {});
-
-        if (effectSound === sound) {
-          effectSound = null;
-        }
       }
     });
+
   } catch (error) {
-    console.warn('Sound effect failed:', error);
+    if (sound) {
+      activeEffects.delete(sound);
+      try {
+        await sound.unloadAsync();
+      } catch {}
+    }
+
+    console.warn('Sound effect playback failed:', error);
   }
 }
 
-export async function updateMusicVolume(volume: number) {
+// ==========================================
+// VOLUME CONTROLS
+// ==========================================
+
+export async function updateMusicVolume(
+  volume: number
+): Promise<void> {
   musicVolume = Math.max(0, Math.min(1, volume));
 
-  if (ambientSound) {
-    try {
-      await ambientSound.setVolumeAsync(musicVolume);
-    } catch (error) {
-      console.warn('Music volume update failed:', error);
-    }
+  if (!ambientSound) return;
+
+  try {
+    await ambientSound.setVolumeAsync(musicVolume);
+  } catch (error) {
+    console.warn('Music volume update failed:', error);
   }
 }
 
-export async function updateEffectsVolume(volume: number) {
+export async function updateEffectsVolume(
+  volume: number
+): Promise<void> {
   effectsVolume = Math.max(0, Math.min(1, volume));
 }
 
+// ==========================================
+// APPLY USER PREFERENCES
+// ==========================================
+
 export async function applyAudioPreferences(
   preferences: UserPreferences
-) {
+): Promise<void> {
   configureAudio(preferences);
 
-  if (!preferences.musicEnabled ||
-      preferences.soundTheme === 'silent') {
+  if (
+    !preferences.musicEnabled ||
+    preferences.soundTheme === 'silent'
+  ) {
     await stopAmbient();
     return;
   }
@@ -208,19 +305,32 @@ export async function applyAudioPreferences(
   await playAmbient(preferences.soundTheme);
 }
 
-export async function cleanupAudio() {
+// ==========================================
+// CLEANUP
+// ==========================================
+
+export async function cleanupAudio(): Promise<void> {
   await stopAmbient();
 
-  if (effectSound) {
-    try {
-      await effectSound.unloadAsync();
-    } catch {
-      // Already unloaded.
-    }
+  const sounds = Array.from(activeEffects);
+  activeEffects.clear();
 
-    effectSound = null;
-  }
+  await Promise.all(
+    sounds.map(async sound => {
+      try {
+        await sound.stopAsync();
+      } catch {}
+
+      try {
+        await sound.unloadAsync();
+      } catch {}
+    })
+  );
 }
+
+// ==========================================
+// EASY-TO-USE EFFECT SHORTCUTS
+// ==========================================
 
 export const AudioEffects = {
   bubblePop: () => playEffect('bubblePop'),

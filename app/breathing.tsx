@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+
 import {
   Animated,
   Easing,
@@ -9,7 +15,7 @@ import {
 } from 'react-native';
 
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 import {
@@ -21,20 +27,22 @@ import {
 
 import {
   applyAudioPreferences,
-  pauseAmbient,
-  resumeAmbient,
-  cleanupAudio,
   AudioEffects,
 } from '../lib/audio';
 
+import type { ColorValue } from 'react-native';
+
 const SESSION_SECONDS = 60;
+const INHALE_SECONDS = 4;
+const EXHALE_SECONDS = 6;
+const BREATH_CYCLE_SECONDS = 10;
 
 type Phase = 'inhale' | 'exhale';
 
 const THEMES: Record<
   OrbTheme,
   {
-    background: string[];
+    background: readonly [ColorValue, ColorValue, ...ColorValue[]];
     primary: string;
     secondary: string;
     core: string;
@@ -100,50 +108,73 @@ export default function Breathing() {
     useState<UserPreferences>(DEFAULT_PREFERENCES);
 
   const [loaded, setLoaded] = useState(false);
-  const [phase, setPhase] = useState<Phase>('inhale');
   const [elapsed, setElapsed] = useState(0);
   const [running, setRunning] = useState(true);
   const [finished, setFinished] = useState(false);
 
   const scale = useRef(new Animated.Value(0.82)).current;
-  const glow = useRef(new Animated.Value(0.3)).current;
+  const glow = useRef(new Animated.Value(0.25)).current;
   const particleMotion = useRef(new Animated.Value(0)).current;
 
   const cycle = useRef<Animated.CompositeAnimation | null>(null);
+
+  const elapsedRef = useRef(0);
+  const runningRef = useRef(true);
+  const finishedRef = useRef(false);
+  const reducedMotionRef = useRef(false);
+
   const lastPhase = useRef<Phase>('inhale');
   const completionPlayed = useRef(false);
 
   const theme =
     THEMES[preferences.orbTheme] || THEMES.energy;
 
-  // ========================================
-  // LOAD PREFERENCES AND AUDIO
-  // ========================================
-
-  useEffect(() => {
-    let active = true;
-
-    async function setup() {
-      const saved = await loadPreferences();
-
-      if (!active) return;
-
-      setPreferences(saved);
-      await applyAudioPreferences(saved);
-
-      if (active) setLoaded(true);
-    }
-
-    setup();
-
-    return () => {
-      active = false;
-      cleanupAudio();
-    };
-  }, []);
+  const currentPhase: Phase =
+    elapsed % BREATH_CYCLE_SECONDS < INHALE_SECONDS
+      ? 'inhale'
+      : 'exhale';
 
   // ========================================
-  // ORB ANIMATION
+  // PREFERENCES
+  // ========================================
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      async function loadSettings() {
+        try {
+          const saved = await loadPreferences();
+
+          if (!active) return;
+
+          setPreferences(saved);
+          reducedMotionRef.current = saved.reducedMotion;
+
+          await applyAudioPreferences(saved);
+
+          if (active) {
+            setLoaded(true);
+          }
+        } catch (error) {
+          console.warn('Could not load preferences:', error);
+
+          if (active) {
+            setLoaded(true);
+          }
+        }
+      }
+
+      loadSettings();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  // ========================================
+  // ANIMATION CONTROL
   // ========================================
 
   const stopAnimation = useCallback(() => {
@@ -152,15 +183,24 @@ export default function Breathing() {
   }, []);
 
   const startOrbAnimation = useCallback(() => {
+    if (
+      !runningRef.current ||
+      finishedRef.current ||
+      !loaded
+    ) {
+      return;
+    }
+
     stopAnimation();
 
-    const position = elapsed % 10;
+    const position =
+      elapsedRef.current % BREATH_CYCLE_SECONDS;
 
-    const inhale = position < 4;
+    const inhale = position < INHALE_SECONDS;
 
     const progress = inhale
-      ? position / 4
-      : (position - 4) / 6;
+      ? position / INHALE_SECONDS
+      : (position - INHALE_SECONDS) / EXHALE_SECONDS;
 
     const fromScale = inhale
       ? 0.82 + progress * 0.30
@@ -174,9 +214,13 @@ export default function Breathing() {
 
     const toGlow = inhale ? 0.90 : 0.25;
 
+    const remainingSeconds = inhale
+      ? INHALE_SECONDS - position
+      : BREATH_CYCLE_SECONDS - position;
+
     const duration = Math.max(
-      250,
-      (inhale ? 4 - position : 10 - position) * 1000
+      100,
+      remainingSeconds * 1000
     );
 
     scale.setValue(fromScale);
@@ -185,8 +229,8 @@ export default function Breathing() {
     const animation = Animated.parallel([
       Animated.timing(scale, {
         toValue: toScale,
-        duration: preferences.reducedMotion
-          ? Math.min(duration, 1200)
+        duration: reducedMotionRef.current
+          ? Math.min(duration, 1500)
           : duration,
         easing: Easing.inOut(Easing.ease),
         useNativeDriver: true,
@@ -194,8 +238,8 @@ export default function Breathing() {
 
       Animated.timing(glow, {
         toValue: toGlow,
-        duration: preferences.reducedMotion
-          ? Math.min(duration, 1200)
+        duration: reducedMotionRef.current
+          ? Math.min(duration, 1500)
           : duration,
         easing: Easing.inOut(Easing.ease),
         useNativeDriver: true,
@@ -203,18 +247,20 @@ export default function Breathing() {
     ]);
 
     cycle.current = animation;
+
     animation.start(({ finished: completed }) => {
-      if (completed && running && !finished) {
+      if (
+        completed &&
+        runningRef.current &&
+        !finishedRef.current
+      ) {
         startOrbAnimation();
       }
     });
   }, [
-    elapsed,
-    finished,
-    glow,
-    preferences.reducedMotion,
-    running,
+    loaded,
     scale,
+    glow,
     stopAnimation,
   ]);
 
@@ -246,9 +292,15 @@ export default function Breathing() {
       setElapsed(previous => {
         const next = previous + 1;
 
+        elapsedRef.current = next;
+
         if (next >= SESSION_SECONDS) {
-          setFinished(true);
+          finishedRef.current = true;
+          runningRef.current = false;
+
           setRunning(false);
+          setFinished(true);
+
           return SESSION_SECONDS;
         }
 
@@ -260,15 +312,10 @@ export default function Breathing() {
   }, [loaded, running, finished]);
 
   // ========================================
-  // BREATHING PHASE
+  // BREATHING PHASE FEEDBACK
   // ========================================
 
-  const currentPhase: Phase =
-    elapsed % 10 < 4 ? 'inhale' : 'exhale';
-
   useEffect(() => {
-    setPhase(currentPhase);
-
     if (
       loaded &&
       running &&
@@ -305,13 +352,14 @@ export default function Breathing() {
       Animated.sequence([
         Animated.timing(particleMotion, {
           toValue: 1,
-          duration: 3500,
+          duration: 4000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: true,
         }),
+
         Animated.timing(particleMotion, {
           toValue: 0,
-          duration: 3500,
+          duration: 4000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: true,
         }),
@@ -332,33 +380,45 @@ export default function Breathing() {
   // SESSION CONTROLS
   // ========================================
 
-  const togglePause = async () => {
-    if (running) {
+  const togglePause = () => {
+    if (runningRef.current) {
+      runningRef.current = false;
+
       setRunning(false);
       stopAnimation();
-      await pauseAmbient();
+
+      // Ambient music deliberately continues playing.
     } else {
+      runningRef.current = true;
+
       setRunning(true);
-      await resumeAmbient();
+
+      // Ambient music continues without restarting.
     }
   };
 
-  const reset = async () => {
+  const reset = () => {
     stopAnimation();
 
+    elapsedRef.current = 0;
+    runningRef.current = true;
+    finishedRef.current = false;
+
     setElapsed(0);
-    setPhase('inhale');
-    lastPhase.current = 'inhale';
-    completionPlayed.current = false;
     setFinished(false);
     setRunning(true);
 
-    await resumeAmbient();
+    lastPhase.current = 'inhale';
+    completionPlayed.current = false;
+
+    scale.setValue(0.82);
+    glow.setValue(0.25);
   };
 
-  const leave = async () => {
+  const leave = () => {
     stopAnimation();
-    await cleanupAudio();
+
+    // Do not unload shared ambient audio here.
     router.replace('/choose');
   };
 
@@ -369,10 +429,22 @@ export default function Breathing() {
   useEffect(() => {
     if (finished && !completionPlayed.current) {
       completionPlayed.current = true;
+
       AudioEffects.completion();
-      cleanupAudio();
     }
   }, [finished]);
+
+  // Stop animation when the component unmounts.
+  useEffect(() => {
+    return () => {
+      stopAnimation();
+      particleMotion.stopAnimation();
+    };
+  }, [stopAnimation, particleMotion]);
+
+  // ========================================
+  // DISPLAY VALUES
+  // ========================================
 
   const remaining = Math.max(
     0,
@@ -576,7 +648,7 @@ export default function Breathing() {
         <Text style={styles.phase}>
           {!running
             ? 'Take your time'
-            : phase === 'inhale'
+            : currentPhase === 'inhale'
               ? 'Breathe in gently'
               : 'Breathe out slowly'}
         </Text>
@@ -584,7 +656,7 @@ export default function Breathing() {
         <Text style={styles.hint}>
           {!running
             ? 'Paused. Resume when you feel ready.'
-            : phase === 'inhale'
+            : currentPhase === 'inhale'
               ? 'Let the light grow.'
               : 'Let the light soften.'}
         </Text>
@@ -604,7 +676,9 @@ export default function Breathing() {
             {String(remaining % 60).padStart(2, '0')} remaining
           </Text>
 
-          <Text style={styles.time}>1 minute</Text>
+          <Text style={styles.time}>
+            1 minute
+          </Text>
         </View>
 
         <Pressable
@@ -634,6 +708,10 @@ export default function Breathing() {
     </LinearGradient>
   );
 }
+
+// ==========================================
+// STYLES
+// ==========================================
 
 const styles = StyleSheet.create({
   page: {
