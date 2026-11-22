@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "PAUSE",
+    "slug": "pause-mobile",
+    "scheme": "pause",
+    "version": "0.3.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.independent.pause"
+    },
+    "android": {
+      "package": "com.independent.pause",
+      "versionCode": 3
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}
